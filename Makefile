@@ -24,11 +24,14 @@ help:
 check: gate report
 
 # Blocking. Any of these failing means the documentation is internally inconsistent, which is a
-# defect in the documentation and not a matter of opinion.
+# defect in the documentation and not a matter of opinion. The last one is about the packaging
+# rather than the documents, and it is here for the same reason: the skill's name lives in four
+# places and nothing in the runtime compares them.
 gate:
 	$(PY) scripts/backlog_index.py --check --docs $(DOCS) --backlog $(BACKLOG)
 	$(PY) scripts/docs_check.py --docs $(DOCS) --backlog $(BACKLOG)
 	$(PY) scripts/coverage_map.py --check --docs $(DOCS)
+	$(PY) scripts/plugin_check.py
 
 # Non-blocking, on purpose.
 #

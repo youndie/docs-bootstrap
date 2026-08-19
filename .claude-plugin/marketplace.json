@@ -1,0 +1,17 @@
+{
+  "name": "docs-bootstrap",
+  "owner": {
+    "name": "Pavel Votyakov",
+    "url": "https://github.com/youndie"
+  },
+  "description": "The docs-bootstrap skill, as an installable Claude Code plugin.",
+  "plugins": [
+    {
+      "name": "docs-bootstrap",
+      "source": "./",
+      "description": "Bootstrap or extend layered, machine-checked documentation for a codebase whose primary reader is a coding agent.",
+      "category": "documentation",
+      "keywords": ["documentation", "agents", "spec", "checks"]
+    }
+  ]
+}

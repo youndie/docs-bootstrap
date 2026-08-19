@@ -1,0 +1,9 @@
+# How this skill introduces itself to agents that are not Claude Code.
+#
+# The repository root is the skill directory — SKILL.md sits next to this file — so this manifest
+# describes the one skill the repository ships. There is no `policy` block on purpose: the skill is
+# model-invoked, because "document this repository" is a request a model should be able to
+# recognise on its own rather than a command a person has to remember the name of.
+interface:
+  display_name: "Docs Bootstrap"
+  short_description: "Layered, machine-checked documentation for a codebase"

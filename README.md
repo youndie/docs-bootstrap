@@ -30,23 +30,34 @@ not.
 | [scripts/](scripts/) | the checks: link graph, coverage map, backlog index, code anchors, BDD count |
 | [example/](example/) | a complete worked instance — a small library lending system, code and docs |
 | [WORKFLOW.md](WORKFLOW.md) | the docs-first process the format grew out of; optional |
+| [.out-of-scope/](.out-of-scope/) | what this repository was asked for and declined, with the reasons |
 
-## Install the skill
+## Install
 
-[SKILL.md](SKILL.md) is a Claude Code skill, so the clone path *is* the installation — the
-directory name has to match the `name:` in its frontmatter:
+Two routes, and they differ in who owns the files afterwards.
+
+**As a plugin**, if you would rather subscribe than fork. The repository is its own marketplace:
+
+```bash
+claude plugin marketplace add youndie/docs-bootstrap
+claude plugin install docs-bootstrap@docs-bootstrap
+```
+
+**As a clone**, if you intend to edit it. [SKILL.md](SKILL.md) is a Claude Code skill, so the clone
+path *is* the installation — the directory name has to match the `name:` in its frontmatter:
 
 ```bash
 git clone https://github.com/youndie/docs-bootstrap ~/.claude/skills/docs-bootstrap
 ```
 
-Then ask your agent to document a repository. It will read `SPEC.md`, survey the code, and write
-the tree.
+Either way, then ask your agent to document a repository. It will read `SPEC.md`, survey the code,
+and write the tree.
 
 Nothing here depends on that packaging. `SKILL.md` is a markdown file of instructions and any agent
-that can be handed one will follow it, and the half that is not the skill — the format contract,
-the templates and the checks — is plain files and five Python scripts that answer to `make check`.
-A team writing these documents by hand gets the same gate.
+that can be handed one will follow it — [agents/openai.yaml](agents/openai.yaml) is how it
+introduces itself to the ones that are not Claude Code — and the half that is not the skill (the
+format contract, the templates and the checks) is plain files and six Python scripts that answer to
+`make check`. A team writing these documents by hand gets the same gate.
 
 ## The two rules
 
@@ -87,6 +98,7 @@ faith.
 | `docs_check.py` | link graph across the layers, `id` = filename, required fields, `status` vocabulary, at least one path into the code | blocking |
 | `coverage_map.py` | the map in `docs/README.md` matches the files on disk | blocking |
 | `backlog_index.py` | the generated index matches the items; no duplicate numbers or slugs; `blocked_by` resolves | blocking |
+| `plugin_check.py` | the skill's name in `SKILL.md`, `plugin.json` and `marketplace.json` is one name, and every declared skill directory holds a `SKILL.md` | blocking |
 | `bdd_report.py` | counts scenarios and how many are automated | report |
 | `code_anchors.py` | whether the paths still exist | report, scheduled |
 
