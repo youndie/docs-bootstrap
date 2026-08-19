@@ -33,12 +33,20 @@ not.
 
 ## Install the skill
 
+[SKILL.md](SKILL.md) is a Claude Code skill, so the clone path *is* the installation — the
+directory name has to match the `name:` in its frontmatter:
+
 ```bash
 git clone https://github.com/youndie/docs-bootstrap ~/.claude/skills/docs-bootstrap
 ```
 
 Then ask your agent to document a repository. It will read `SPEC.md`, survey the code, and write
 the tree.
+
+Nothing here depends on that packaging. `SKILL.md` is a markdown file of instructions and any agent
+that can be handed one will follow it, and the half that is not the skill — the format contract,
+the templates and the checks — is plain files and five Python scripts that answer to `make check`.
+A team writing these documents by hand gets the same gate.
 
 ## The two rules
 
