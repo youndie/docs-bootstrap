@@ -1,6 +1,6 @@
 {
   "name": "docs-bootstrap",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Layered, machine-checked documentation for a codebase whose primary reader is a coding agent.",
   "author": {
     "name": "Pavel Votyakov",
@@ -8,6 +8,13 @@
   },
   "repository": "https://github.com/youndie/docs-bootstrap",
   "license": "MIT",
-  "keywords": ["documentation", "agents", "spec", "checks"],
-  "skills": ["."]
+  "keywords": [
+    "documentation",
+    "agents",
+    "spec",
+    "checks"
+  ],
+  "skills": [
+    "."
+  ]
 }
