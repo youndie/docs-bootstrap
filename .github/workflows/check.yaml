@@ -1,0 +1,39 @@
+name: check
+
+# No path filters. The checks are cheap, and a filter is how a repository ends up with a green
+# pull request that breaks main: two changes that are each harmless alone disagree once merged.
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install pyyaml
+
+      # Exactly the target a contributor runs locally. See the Makefile for why this matters.
+      - run: make check
+
+      # The one check that cannot run locally: an item number that was free when this branch was cut
+      # and has since been taken by another branch that merged first. Each pull request is green on
+      # its own; the duplicate appears after the second merge, when the number is already quoted
+      # elsewhere. Pull requests only - on a push there is nothing to compare against.
+      - if: github.event_name == 'pull_request'
+        run: |
+          # An explicit refspec, because a bare `git fetch origin <branch>` only moves FETCH_HEAD:
+          # it would leave origin/<branch> missing on the shallow clone checkout makes by default.
+          # The check reads a tree, not a history, so the shallow clone is enough.
+          git fetch --no-tags origin "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
+          python3 scripts/backlog_index.py --against "origin/$GITHUB_BASE_REF" --docs example/docs
+
+      # `status: draft` on the default branch means intent was documented as fact. It is legal in a
+      # pull request and a defect once merged, so this runs on push to main only.
+      - if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: python3 scripts/docs_check.py --on-main --docs example/docs --backlog example/backlog.md

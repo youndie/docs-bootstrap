@@ -1,0 +1,253 @@
+---
+name: docs-bootstrap
+description: Bootstrap or extend layered, machine-checked documentation for a codebase — research that separates what was verified from what was assumed, features with BDD scenarios, client screens, API endpoint references, service documents and a file-per-item backlog, all carrying paths into the code. Use when a repository has no documentation an agent can navigate, when documentation exists but has drifted from the code, or when a new feature needs documenting before it is built.
+---
+
+# docs-bootstrap
+
+Produce documentation whose primary consumer is a coding agent: layers linked by ids, every
+document carrying paths into the code, every claim checkable by machine.
+
+```
+[ Research — why the architecture is this and not that; verified vs hypothesis ]   optional
+                              │
+[ Feature — what the system does and why, + BDD scenarios = acceptance criteria ]
+                              │
+[ Screen / flow — what the user sees ]            only if there is a client
+                              │
+[ API — the contract: URL, auth tier, error codes ]
+                              │
+[ Service — who owns the data, config, deploy, quirks ]
+```
+
+Each layer answers its own question and points at its neighbour by id. Read [SPEC.md](SPEC.md)
+before writing anything — it is the contract. [example/](example/) is a complete worked instance of
+it; when unsure what a filled-in document should look like, read the example rather than guessing.
+
+## The two rules everything else follows from
+
+> **`main` describes what exists. An open pull request describes what will be.**
+
+Never document intent as fact. A feature that is designed but not shipped is `status: draft` and
+lives in an open pull request. What is not built yet is either that, or labelled *target* or
+*hypothesis* in the text itself.
+
+> **What was verified is separated from what was assumed, explicitly.**
+
+Every status code, error string, field name and limit must be read out of the source before it is
+written down. A document that does not distinguish "I read this in the code" from "presumably" is
+worse than no document at all: it looks equally authoritative in both cases, and the next reader
+builds on the sand without knowing which part is sand. If you cannot find something, say the
+document does not cover it — an admitted gap costs a reader nothing, an invented detail costs them
+their trust in the whole file.
+
+## Procedure
+
+### 0. Decide the scope before creating a single file
+
+1. **Layout.** One product in one repository → `docs/` inside it. A platform of three or more
+   service repositories where a feature is smeared across them → a separate docs repository, and
+   then the docs-first process of [WORKFLOW.md](WORKFLOW.md) applies. Start with `docs/` inside the
+   repository: moving out later is easy, moving back is not.
+2. **Greenfield or brownfield.** If there is code, "verified fact" means *read in this code*. If
+   there is no code yet, the things you can verify are external artefacts — the contents of a
+   dependency's jar or klib, a package registry listing, the official documentation *of the version
+   you are actually pinning* — and everything else is honestly called a decision or a hypothesis.
+3. **Is there a client anyone will change from the document?** If not, no `screens/` layer at all;
+   how the UI is put together lives in `services/<web>.md`.
+4. **What already exists.** `README`, the repository's agent instructions, `ARCHITECTURE.md`,
+   comments in the code — these are research material, not rubble to clear. A contradiction between
+   them and the code is a finding, and its place is the research document.
+
+Ask the user only about what genuinely changes the layout — usually one question, *inside the
+repository or a separate one*. Everything else is a default you take yourself and say out loud in
+your answer.
+
+Also ask what to cover if the scope is not obvious. Documenting everything at once produces thin
+documents; documenting one feature end to end across every layer produces a template for the rest.
+
+### 1. Research, and write it into the file as you go
+
+Research comes **before** the layer documents, and it is written while you read, not reconstructed
+afterwards. It is also the first thing anyone picking up a task will read. Scale it to the job: a
+platform is hours of reading code, one feature is a single pass.
+
+* **Every fact carries where it was verified.** A `| Fact | Where verified |` table with a path, a
+  class name inside an artefact, a URL. Verification addresses are what make the document
+  re-checkable by the next person instead of merely believable.
+* **Your memory is not a source.** Library versions, whether an API exists, how a framework behaves
+  in a given version — this is exactly where memory is wrong most often, and exactly what an
+  architecture decision then rests on. Unpack the artefact, list the registry, fetch the docs.
+* **Derive the consequence, separately.** A fact on its own is inert: "JMX is resolved lazily" does
+  nothing, while "therefore the base metric set must work without JMX" decides the architecture.
+  The consequences are the valuable half.
+* **A hypothesis is called a hypothesis and gets an address** — "check in M2". When that milestone
+  closes, the hypothesis becomes a fact or a refutation *in writing*, not a silent deletion.
+* **A decision is recorded with its reason and the alternative you rejected.** In six months the
+  value is in why, not what; what is visible in the diff.
+* **A deviation from what you were asked for is the most valuable entry in the document.** The user
+  described X, research showed X impossible or harmful — that is a labelled *deviation from the
+  brief* with its reasoning, never a quiet substitution.
+* **Risks come with mitigation machinery**, not with a statement of concern. "Might not be fast
+  enough" is not a risk; "UDP loss distorts the picture silently — mitigation: a sequence number
+  per packet so the server shows gaps instead of drawing a clean graph over incomplete data" is.
+
+Research is a living document. When the implementation diverges from it, amend **the research**, at
+the point of divergence: "this used to say take X — you cannot, because Y; the working replacement
+is Z". That keeps the document true *and* preserves why the first idea was wrong, which is what
+saves the next person from trying it again.
+
+Which of the two forms you write — the permanent `docs/research/research-architecture.md` or the
+per-feature file that is deleted before its branch merges — follows from the layout you chose in
+step 0. [SPEC.md §3.5](SPEC.md) has both, with templates.
+
+### 2. Create the tree
+
+```
+docs/README.md      from templates/docs-readme.md
+docs/research/  docs/features/  docs/screens/  docs/api/  docs/services/  docs/backlog/
+docs/templates/     copy the templates in, so the format travels with the repository
+backlog.md          the index page, with the BEGIN INDEX / END INDEX markers
+scripts/            copy the checkers in as well — a check that lives elsewhere does not run
+```
+
+Omit the layers the project does not have. A single-service tool has no `screens/`; a library has
+no `api/`. Do not rename them — the tooling looks for these names.
+
+### 3. Write the layers bottom-up by how reliable the knowledge is
+
+Not top-down by the diagram:
+
+1. `services/` — what the services or modules even are and who owns what. The most verifiable.
+2. `api/` — the contracts between them, written from the route code, because a mistake here is the
+   most expensive one in the tree.
+3. `features/` — what it gives the user, plus BDD. Rests on the two layers below it.
+4. `screens/` — if there is a client.
+
+Common to every layer:
+
+* **One document, one entity.** A feature touching three services is **one** file with three
+  entries in `involved_services`, not three files.
+* **`id` in the frontmatter equals the filename.** Cross-layer links are ids in the frontmatter
+  *and* ordinary markdown links in the body.
+* **Paths instead of copies, always.** DTO fields, config keys, endpoint lists are not duplicated —
+  a path is given. A pasted list is wrong within a sprint; a path stays right until the file is
+  renamed, and there is a check for that.
+* **Language: the project's.** Identifiers, URLs and HTTP header names verbatim as in the code.
+
+Useful optional documents: `infrastructure.md` for everything that lives *between* services and
+therefore fits in none of them (environments, domains, credentials, deploy triggers), `design/` for
+mockups, `workflow.md` if the process is not the obvious one.
+
+For each document: copy the template, fill the frontmatter, then fill the body from what you read
+in the code.
+
+### 4. The code anchors table is not optional
+
+Every document needs at least one table of paths into the code. This is the single thing that makes
+the documentation worth having for an agent, and it is the one structural rule the checker
+enforces. Point at the feature directory or the key file — not at a line number, which moves.
+
+The one exception is research, which legitimately predates the code; there the checker warns
+instead of failing, and what you cite is the artefact you verified against.
+
+### 5. BDD scenarios are acceptance criteria
+
+Write them against behaviour you have confirmed in the code: real status codes, real error strings.
+While the code does not exist, mark them *target*. A scenario covered by a test carries an
+`**Automated:**` line naming it; the absence of that line means the check is manual, and that
+asymmetry is worth seeing.
+
+### 6. Quirks sections are the highest-value content
+
+An empty logout handler, a hard-coded test domain, a fire-and-forget sync, state kept in memory
+that no restart survives, a config key nothing reads — write these down. They are why someone opens
+the file at two in the morning. Do not quietly delete one when it is supposedly fixed; delete it
+after verifying the fix.
+
+### 7. Backlog
+
+Research without "what to do next" is an essay, not a working document. Size the backlog to the
+project:
+
+* **Up to about thirty items in one repository** → `BACKLOG.md` at the root, items `M-NN` grouped
+  under milestones M0…MN as checkboxes. A milestone closes as a whole and gets a summary line: what
+  came out beyond the plan, and which research hypothesis was confirmed or refuted.
+* **Dozens of items, or several repositories** → one file per item in `docs/backlog/`, flat, plus
+  the generated index in `backlog.md`.
+
+Either way: **`stage`, `priority` and `status` are frontmatter fields, not directories**, because
+documents cite items by id and re-prioritising must not break a link. There is no separate epic
+entity; `epic: feature-<name>` is the grouping.
+
+The tables in `backlog.md` between the markers are generated. Edit the item, run the generator,
+commit both.
+
+### 8. Wire the documentation into the repository
+
+Without this step the documents exist and nobody opens them.
+
+1. **The repository's agent instructions** (`CLAUDE.md` or equivalent) get a "how to start a
+   session" section: research → backlog → the layer document the task belongs to. This is the
+   single highest-leverage line in the whole exercise.
+2. **The product README** links to `docs/` in one line.
+3. **CI** runs the same checks a contributor runs locally. A local set that differs from the CI set
+   turns "green here, red there" into the normal state of affairs and people stop reading either.
+
+On a pull request, add the one check that cannot run locally:
+
+```bash
+git fetch --no-tags origin "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
+python3 scripts/backlog_index.py --against "origin/$GITHUB_BASE_REF"
+```
+
+An ordinary duplicate check only sees collisions inside one state of the repository. Two pull
+requests that took the same item number are each green on their own, and the duplicate appears
+after the **second** merge — the default branch turns red, after the fact, with the wrong number
+already quoted from code and documents.
+
+### 9. Run the checks and fix what they find
+
+```bash
+pip install pyyaml
+python3 scripts/backlog_index.py --check      # the gate: blocking, and CI runs exactly this set
+python3 scripts/docs_check.py
+python3 scripts/coverage_map.py --check
+python3 scripts/bdd_report.py                 # reports: read by a person, not by a gate
+python3 scripts/code_anchors.py --repos ..
+```
+
+Every script defaults to `docs` in the working directory, so in a normal project they take no
+arguments. Copying this repository's [Makefile](Makefile) in gives you `make check` / `make report`
+/ `make fix` and, more to the point, one named target that CI and a contributor both run — a local
+set that differs from the CI set turns "green here, red there" into the normal state of affairs.
+
+The two reports are non-blocking on purpose. Demanding a percentage of automated scenarios is
+meaningless while acceptance is manual, and an anchor goes stale because of a refactor in somebody
+else's repository, not because of an edit here — a machine cannot tell a live path from one quoted
+as obsolete. `make fix` regenerates the index and appends the coverage-map lines you forgot; the
+descriptions it writes are placeholders, and finishing them is yours.
+
+## When the documentation already exists
+
+Do not rewrite it. Report the discrepancy between what a document claims and what the code does,
+and let the person who owns the meaning decide. The `main` invariant only holds while that is true;
+an agent that silently overwrites hand-written documents breaks it in one commit.
+
+Extend instead: add the missing layer, add the anchors table to a document that has none, add the
+quirk you just discovered.
+
+## What not to do
+
+- **Do not put research off until after the structure is in place.** Structure without research is
+  empty files with the right names, and they begin lying by existing.
+- **Do not retell the code.** If a paragraph can be replaced by a path, replace it.
+- **Do not enforce the section structure of the templates.** Documents legitimately deviate — a
+  feature that is mostly a reality check has no business-rules section. Check the substance
+  instead: is there a path into the code?
+- **Do not treat an empty list as a mistake.** `client_entries: []` is the answer "this feature has
+  no client surface".
+- **Do not invent a layer that is not there.** No client, no `screens/`; one service, and
+  `services/` may be a single file or a section of the README.
+- **Do not write a number you have not seen.** Measured figures name what was measured and how;
+  everything else is a hypothesis and says so.

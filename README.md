@@ -1,0 +1,103 @@
+# docs-bootstrap
+
+A documentation format for codebases whose primary reader is a coding agent, and the checks that
+keep it honest.
+
+Four layers linked by ids, and a fifth above them that says why. Every document carries paths into
+the code, so a reader — human or agent — gets from a claim to the source in one hop. Nothing in a
+document duplicates what lives in the code, because a copy is wrong within a sprint and a path is
+not.
+
+```
+[ Research — why the architecture is this one; verified vs hypothesis ]   optional
+                        │
+[ Feature — what the system does and why, + BDD scenarios ]
+                        │
+[ Client screen or flow — states, actions, navigation ]
+                        │
+[ API endpoint — the complete route reference, auth tiers ]
+                        │
+[ Service — ownership, dependencies, deploy, quirks ]
+```
+
+## What is here
+
+| | |
+|---|---|
+| [SKILL.md](SKILL.md) | the skill: how an agent bootstraps or extends this documentation for a repository |
+| [SPEC.md](SPEC.md) | the format contract — layers, frontmatter, anchors, `spec_version: 1` |
+| [templates/](templates/) | one template per document type |
+| [scripts/](scripts/) | the checks: link graph, coverage map, backlog index, code anchors, BDD count |
+| [example/](example/) | a complete worked instance — a small library lending system, code and docs |
+| [WORKFLOW.md](WORKFLOW.md) | the docs-first process the format grew out of; optional |
+
+## Install the skill
+
+```bash
+git clone https://github.com/youndie/docs-bootstrap ~/.claude/skills/docs-bootstrap
+```
+
+Then ask your agent to document a repository. It will read `SPEC.md`, survey the code, and write
+the tree.
+
+## The two rules
+
+> **`main` describes what exists. An open pull request describes what will be.**
+
+Intent is never documented as fact. A designed but unshipped feature is `status: draft` and lives
+in an open pull request. `scripts/docs_check.py --on-main` turns a draft that reached the default
+branch into an error.
+
+> **What was verified is separated from what was assumed, explicitly.**
+
+Every status code, error string and limit is read out of the source before it is written down, and
+a claim that was not verified says so. A document that does not distinguish the two is worse than
+no document: it reads as equally authoritative either way. This is why the format is built around
+paths, why `code_anchors.py` exists, and why the research layer records where each fact was
+checked.
+
+## The example is the specification you can run
+
+`example/` is a small library lending system: one architecture research document, three services,
+three features, two screens, two endpoint references, six backlog items — and a real, if tiny, code
+tree underneath, so that every anchor in every document resolves to a file that exists.
+
+That is not decoration. It means this repository's own CI runs the checks against its own example:
+
+```bash
+pip install pyyaml
+make check
+```
+
+A format that claims to be machine-checkable and does not check itself is asking to be taken on
+faith.
+
+## What the checks do, and what they refuse to do
+
+| Script | Guards | In CI |
+|---|---|---|
+| `docs_check.py` | link graph across the layers, `id` = filename, required fields, `status` vocabulary, at least one path into the code | blocking |
+| `coverage_map.py` | the map in `docs/README.md` matches the files on disk | blocking |
+| `backlog_index.py` | the generated index matches the items; no duplicate numbers or slugs; `blocked_by` resolves | blocking |
+| `bdd_report.py` | counts scenarios and how many are automated | report |
+| `code_anchors.py` | whether the paths still exist | report, scheduled |
+
+Three things they deliberately do **not** do:
+
+- **They do not enforce the template's section structure.** Documents legitimately deviate: a
+  feature that is mostly a reality check has no business-rules section. What is checked is the
+  substance of the rule — that there is at least one path into the code.
+- **They do not confuse an empty list with forgetfulness.** `client_entries: []` is the answer
+  "this feature has no client surface"; a missing field is a question, and only a warning.
+- **They do not block on code anchors.** An anchor breaks because of a refactor in someone else's
+  repository, not because of an edit here, and a path quoted *as obsolete* is
+  indistinguishable from a live one by machine. A person reads that report.
+
+## Status
+
+`spec_version: 1`. Additive changes keep the version; anything that would make a v1 reader wrong
+raises it. See [SPEC.md §8](SPEC.md).
+
+## License
+
+MIT.
