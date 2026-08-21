@@ -71,8 +71,12 @@ ANCHOR_OPTIONAL = {"research"}
 # Fields whose values are ids of other documents. The other list-valued fields (`tech_stack`,
 # `contract_source`, `depends_on`) hold free text and the names of external systems, so no links
 # are resolved through them.
+#
+# `services` was missing from this list for a while, which made it the one link field the spec
+# declares and the resolver ignored: `services: [no-such-service]` on an endpoint document was
+# accepted in silence, and so was a link to a service whose document says it is deprecated.
 REF_FIELDS = ("involved_services", "client_entries", "api",
-              "parent_feature", "calls_api", "epic")
+              "parent_feature", "calls_api", "services", "epic")
 
 # A path into the code: something in backticks with a slash in it, or a bare file name with a
 # familiar source extension. Deliberately loose - the question is "is there a way into the code
@@ -174,6 +178,10 @@ def refs(fm, field):
 def check(docs, root, hub, on_main=False):
     errors, warns, info = [], [], []
     ids = {d["fm"].get("id") or d["stem"] for d in docs.values()}
+    # id -> status, so that a link can be judged by what it points at rather than only by whether
+    # it resolves. See the deprecated check below.
+    status_of = {(d["fm"].get("id") or d["stem"]): str(d["fm"].get("status", ""))
+                 for d in docs.values()}
 
     # Who links to me. Both the frontmatter AND the markdown links in the body count: screens are
     # tied to each other by navigation (a main screen leads to a profile screen leads to an orders
@@ -222,6 +230,19 @@ def check(docs, root, hub, on_main=False):
                 if r not in ids:
                     errors.append((path, "broken-ref",
                                    "{0}: {1} - no such document".format(field, r)))
+                # A link that resolves to a document announcing that its subject is gone. The
+                # third status value used to do nothing at all: `draft` has --on-main, `active` is
+                # the default, and `deprecated` was accepted and acted on by nobody - so a live
+                # feature could keep routing readers to a service whose document says the
+                # behaviour no longer exists, and every check stayed green.
+                #
+                # A warning rather than an error, because deprecating something and updating its
+                # dependants are days apart and both states are legitimate in between. What is not
+                # legitimate is nobody knowing.
+                elif status_of.get(r) == "deprecated" and status != "deprecated":
+                    warns.append((path, "points-at-deprecated",
+                                  "{0}: {1} is deprecated, and this document is {2}"
+                                  .format(field, r, status or "not marked")))
 
         for link in set(MD_LINK.findall(d["text"])):
             if not os.path.isfile(os.path.join(root, link)):
