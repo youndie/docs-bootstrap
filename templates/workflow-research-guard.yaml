@@ -1,0 +1,49 @@
+# Copy to .github/workflows/research-guard.yaml in each **service** repository that takes part in
+# the docs-first process of WORKFLOW.md. It is the other half of `docs_check.py --on-main`.
+#
+# WHY IT IS A SEPARATE FILE, IN A DIFFERENT REPOSITORY. The invariant has two halves and they live
+# apart. "A document describing intent must not reach the default branch" is checked in the
+# documentation repository, where the documents are. "A research file must not reach the default
+# branch" cannot be checked there at all: the file is in a service repository, which has no
+# documentation tree and which none of the checks ever look at. Without this, that half of the rule
+# is prose with nothing behind it — and it was, until somebody merged one and noticed that every
+# check stayed green because none of them could see it.
+#
+# It needs no Python and no dependency: the whole check is `ls`.
+
+name: research guard
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # On the default branch this is an error. Research describes a plan, and a plan on `main`
+      # starts lying the moment the code diverges from it — which is immediately, because the code
+      # that made it merge is the code that diverged from it.
+      - if: github.event_name == 'push'
+        run: |
+          if compgen -G "research/*.md" > /dev/null; then
+            echo "::error::research/ reached the default branch. Anything worth keeping belongs in"
+            echo "::error::the documentation (behaviour) or in the repository's agent instructions"
+            echo "::error::(how the code is arranged). Delete the file."
+            ls -1 research/*.md
+            exit 1
+          fi
+          echo "no research/ on the default branch"
+
+      # On a pull request it is a reminder rather than a gate: this is exactly where a research
+      # file is supposed to be. A gate here would block the branch for doing the right thing.
+      - if: github.event_name == 'pull_request'
+        run: |
+          if compgen -G "research/*.md" > /dev/null; then
+            for f in research/*.md; do
+              echo "::notice file=$f::delete this before merging - see WORKFLOW.md phase 5"
+            done
+          fi

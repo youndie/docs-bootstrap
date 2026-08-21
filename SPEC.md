@@ -217,8 +217,14 @@ each is mitigated. Without it the other four layers describe a system whose ever
 either obvious or arbitrary, and the next person re-litigates a decision that was settled a year
 ago against evidence they cannot see.
 
-It exists in two forms, and which one a project gets follows from a single question — **does the
-document have to outlive the branch it was written in?**
+It exists in two forms. They share a word and almost nothing else, so the difference is worth
+stating before the shapes: one answers **why the system is built this way**, and stays true for as
+long as the reasoning does; the other is **the plan for one branch**, and is replaced by the code
+the moment that code exists. That is why the first is amended and the second is deleted — and why
+a project can have both, one of them, or neither.
+
+Which one a project gets follows from a single question: **does the document have to outlive the
+branch it was written in?**
 
 **Permanent — one document per product, `docs/research/research-architecture.md`.** Use it when the
 product lives in one repository. It is the entry point of the documentation: the agent instructions

@@ -99,7 +99,12 @@ saves the next person from trying it again.
 
 Which of the two forms you write — the permanent `docs/research/research-architecture.md` or the
 per-feature file that is deleted before its branch merges — follows from the layout you chose in
-step 0. [SPEC.md §3.5](SPEC.md) has both, with templates.
+step 0. They share a word and have opposite lifetimes: one says why the system is built this way
+and is amended as you learn, the other is the plan for one branch and is replaced by the code it
+asked for. [SPEC.md §3.5](SPEC.md) has both, with templates. If the project uses the second, give
+each service repository
+[templates/workflow-research-guard.yaml](templates/workflow-research-guard.yaml) — nothing in the
+documentation repository can see a file that lives in a service one.
 
 ### 2. Create the tree
 

@@ -57,6 +57,16 @@ into the docs pull request (behaviour) or the repository's agent instructions (h
 arranged) by then. Research merged into `main` starts lying immediately and misleads the next
 reader.
 
+This is the per-feature plan, not the architecture research a single-repository project keeps at
+`docs/research/research-architecture.md` for good. The two share a word and have opposite
+lifetimes; [SPEC.md §3.5](SPEC.md) is where the difference is set out.
+
+Nothing in the documentation repository can check this half of the invariant — the file is in a
+service repository, which has no documentation tree and which none of the checks ever look at. Copy
+[templates/workflow-research-guard.yaml](templates/workflow-research-guard.yaml) into each service
+repository: it fails the default branch when `research/*.md` is present, and leaves a reminder on a
+pull request, where the file belongs.
+
 ### 3. Implement — code in the same branches
 
 The agent session in a branch starts by reading the research file plus the feature document from
