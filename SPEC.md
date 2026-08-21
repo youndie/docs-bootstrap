@@ -112,6 +112,23 @@ BDD scenarios are the acceptance criteria. They are written against observed beh
 status codes, real error strings — not against intent. A scenario that is covered by an automated
 test says so on a `**Automated:**` line; the absence of that line means the check is manual.
 
+The line names the test, optionally preceded by the repository it lives in:
+
+```markdown
+**Automated:** catalog-api LoanRoutesTest
+**Automated:** `tests/test_store.py::test_unacked_task_returns_to_the_front`
+```
+
+The repository is written only when the documentation covers more than one, and is the first of two
+whitespace-separated tokens; a single token is always the test. A reference of the form
+`path::name` or `path#name` is a locator rather than a name, so a tool looking for the test greps
+for the last segment — the file may be renamed while the function keeps its name. Backticks around
+either part are optional.
+
+**Exactly one tool counts this line.** In this repository that is `bdd_report.py`, which has to
+parse the line anyway in order to go looking for the test. A second counter is how two checks in
+one run came to report 100% and 0% about the same file.
+
 ### 3.2 client_screen / client_flow
 
 Filename `screen-<name>.md` or `bot-flow-<name>.md`.
@@ -185,6 +202,12 @@ one thing a reader cannot recover from the code, because the code only shows the
 
 `repo_url` doubles as machine data: `code_anchors.py` uses it to decide which repository a path in
 this service's anchors belongs to.
+
+It is **not required**. In the single-repository layout `services/` describes the modules of one
+repository, so the field would carry the same URL on every document in the layer — a duplicate that
+adds nothing and goes stale together. Its absence is a warning naming what it costs: anchors are
+then looked for in every repository at once, which can report a false "found" when two repositories
+hold a file with the same path.
 
 ### 3.5 research
 
@@ -339,3 +362,11 @@ A tool that reads this format:
 `spec_version` is `1`. Additive changes — a new optional field, a new `type` — keep the version.
 Anything that would make a v1 reader wrong (renaming a field, changing what a value means) raises
 it, and tools state which version they read.
+
+**`repo_url` stopped being required without raising the version**, and the reasoning is recorded
+here rather than left to be inferred. Relaxing a requirement makes previously invalid documents
+valid, which can break a reader that counted on the field — the letter of the rule above. It was
+treated as a defect in the specification instead: the layout this format recommends first could not
+satisfy the requirement other than by repeating one URL on every document in a layer, which was
+found by documenting a project rather than by reading the text. No published reader depended on it.
+A later relaxation, once there are readers, is a version bump.

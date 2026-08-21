@@ -84,8 +84,11 @@ def check(root):
     plugin_path = os.path.join(plugin_dir, "plugin.json")
 
     if not os.path.isfile(plugin_path):
+        # "Not checked" and "nothing wrong" are different statements, and saying both in one run is
+        # how a report stops being read. Returning None rather than an empty list is what lets the
+        # caller tell them apart.
         print("no {0} - packaging not checked".format(os.path.relpath(plugin_path, root)))
-        return problems
+        return None
 
     plugin = read_json(plugin_path, problems)
     if plugin is None:
@@ -147,6 +150,8 @@ def main():
 
     _utf8_stdout()
     problems = check(os.path.abspath(args.root))
+    if problems is None:
+        return 0
     if problems:
         print("Packaging is inconsistent:")
         for p in problems:

@@ -155,8 +155,10 @@ instead of failing, and what you cite is the artefact you verified against.
 
 Write them against behaviour you have confirmed in the code: real status codes, real error strings.
 While the code does not exist, mark them *target*. A scenario covered by a test carries an
-`**Automated:**` line naming it; the absence of that line means the check is manual, and that
-asymmetry is worth seeing.
+`**Automated:**` line naming it — `**Automated:** catalog-api LoanRoutesTest` when several
+repositories are in play, or just the test when one is, in whatever form that project writes
+(`tests/test_store.py::test_name` is fine). The absence of that line means the check is manual, and
+that asymmetry is worth seeing.
 
 ### 6. Quirks sections are the highest-value content
 

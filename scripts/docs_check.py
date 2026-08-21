@@ -23,7 +23,7 @@ Three levels of severity, and the split is the point:
                that is not the file name. Blocking.
   * WARNING  - the rule is right but has legitimate exceptions: an orphan document, a feature with
                no screen. Not blocking.
-  * INFO     - counters without a judgement (for instance the share of automated BDD scenarios).
+  * INFO     - counters without a judgement (for instance the number of BDD scenarios).
 
 The rule about exceptions matters more than the checks themselves: a gate that cannot be passed
 legitimately gets switched off entirely within a month.
@@ -52,7 +52,7 @@ LAYERS = {
     "features": ["id", "title", "type", "status", "involved_services"],
     "screens":  ["id", "title", "type", "platform", "status", "parent_feature"],
     "api":      ["id", "title", "type", "status", "services", "contract_source"],
-    "services": ["id", "title", "type", "repo_url", "tech_stack"],
+    "services": ["id", "title", "type", "tech_stack"],
 }
 
 # Research is the one layer that legitimately predates the code, so it is the one layer where a
@@ -61,6 +61,12 @@ LAYERS = {
 # at yet; demanding an anchor there would either block the check or teach people to invent a path,
 # and an invented path is worse than an admitted gap.
 ANCHOR_OPTIONAL = {"research"}
+
+# `repo_url` is not in the required list above, and that is a decision rather than an oversight. In
+# the single-repository layout `services/` describes the modules of one repository, so the field
+# would hold the same URL on every document in the layer - bookkeeping that says nothing and gets
+# out of date together. It still earns a warning, because code_anchors.py uses it to decide which
+# repository an anchor belongs to, and without it the path is looked for in all of them at once.
 
 # Fields whose values are ids of other documents. The other list-valued fields (`tech_stack`,
 # `contract_source`, `depends_on`) hold free text and the names of external systems, so no links
@@ -88,7 +94,12 @@ MD_LINK = re.compile(
 HUB_LINK = re.compile(r"\]\((?!https?:)([^)#\s]+\.md)")
 
 SCENARIO = re.compile(r"^###\s+Scenario:", re.M)
-AUTOMATED = re.compile(r"\*\*Automated:\*\*")
+
+# There is deliberately no pattern for `**Automated:**` here. How many scenarios carry a link to a
+# test has exactly one owner, bdd_report.py, which needs the shape of that line anyway in order to
+# go looking for the test. Counting it in both places is how the two came to disagree: a bare
+# marker matched here, a repository-and-test pair matched there, and one run reported 100% and 0%
+# about the same file. A number with two owners has none.
 
 
 def _utf8_stdout():
@@ -220,8 +231,9 @@ def check(docs, root, hub, on_main=False):
             msg = ("not a single path into the code - the implementation cannot be "
                    "reached from this document in one hop")
             if d["layer"] in ANCHOR_OPTIONAL:
-                warns.append((path, "no-code-anchor", msg + " (research may predate the code; "
-                                                            "cite the artefact you verified against)"))
+                warns.append((path, "no-code-anchor",
+                              msg + " (research may predate the code; cite the artefact you "
+                                    "verified against)"))
             else:
                 errors.append((path, "no-code-anchor", msg))
 
@@ -232,6 +244,14 @@ def check(docs, root, hub, on_main=False):
                 and d["layer"] != "features"):
             warns.append((path, "orphan",
                           "no document and no hub (README, backlog) links here"))
+
+        # See the note next to ANCHOR_OPTIONAL: absent is legitimate for the modules of a single
+        # repository, so this is a warning that names what it costs rather than an error.
+        if d["layer"] == "services" and not fm.get("repo_url"):
+            warns.append((path, "no-repo-url",
+                          "no repo_url - code_anchors.py will look this service's paths up in "
+                          "every repository at once instead of in one. Legitimate when the "
+                          "documentation covers a single repository"))
 
     # Coverage in both directions: a feature should say where the client enters and which
     # contracts it touches.
@@ -254,11 +274,9 @@ def check(docs, root, hub, on_main=False):
                 warns.append((path, "no-{0}".format(field.replace("_", "-")), msg))
 
     total = sum(len(SCENARIO.findall(d["text"])) for d in docs.values())
-    auto = sum(len(AUTOMATED.findall(d["text"])) for d in docs.values())
-    info.append(("BDD", "{0} scenarios, {1} marked automated ({2}%)"
-                 .format(total, auto, auto * 100 // total if total else 0)))
+    info.append(("BDD", "{0} scenarios (how many are automated: bdd_report.py)".format(total)))
     return errors, warns, info, {
-        "documents": len(docs), "scenarios": total, "automated": auto,
+        "documents": len(docs), "scenarios": total,
         "errors": len(errors), "warnings": len(warns),
     }
 

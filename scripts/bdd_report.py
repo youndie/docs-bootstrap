@@ -39,9 +39,36 @@ import sys
 FOLDERS = ("research", "features", "screens", "api", "services")
 
 SCENARIO = re.compile(r"^###\s+Scenario:\s*(.+?)\s*$", re.M)
-# `**Automated:** `catalog-api LoanRoutesTest`` - the repository and the name of the test. The
-# backticks may wrap the pair, one of them, or neither.
-AUTOMATED = re.compile(r"\*\*Automated:\*\*\s*`?([A-Za-z0-9][A-Za-z0-9._-]*)`?\s+`?([A-Za-z0-9_.]+)`?")
+# `**Automated:** <repository> <test>`, or `**Automated:** <test>` when the documentation covers a
+# single repository. Backticks may wrap either part or neither. Two shapes of test reference are
+# accepted because both are what people write:
+#
+#     **Automated:** catalog-api LoanRoutesTest
+#     **Automated:** `tests/test_store.py::test_unacked_task_returns_to_the_front`
+#
+# The repository is optional and comes first, so the pattern only treats a leading token as one
+# when a second token follows it. A path::test reference is a single token - the character class
+# for a repository name has no slash in it - and therefore reads as the test, which is right.
+# Requiring the pair was how a whole documentation tree could carry a link on every scenario and
+# be reported as having none.
+AUTOMATED = re.compile(
+    r"\*\*Automated:\*\*\s*"
+    r"(?:`?([A-Za-z0-9][A-Za-z0-9._-]*)`?[ \t]+)?"
+    r"`?([A-Za-z0-9_][A-Za-z0-9_./:#-]*)`?"
+)
+
+
+def test_needle(reference):
+    """The part of a test reference worth grepping for.
+
+    `tests/test_store.py::test_x` is a locator, not a name: the file may be renamed while the test
+    keeps its name, and the whole string occurs nowhere in the source. What does occur is the last
+    segment after `::` or `#`, which is the name of the function or method.
+    """
+    for separator in ("::", "#"):
+        if separator in reference:
+            reference = reference.rsplit(separator, 1)[-1]
+    return reference
 
 IGNORED_DIRS = {".git", ".hg", ".svn", "node_modules", "build", "dist", "out", "target",
                 "__pycache__", ".venv", "venv", ".tox", ".idea", ".gradle", ".next",
@@ -79,7 +106,8 @@ def collect(root):
             out.append({
                 "document": name[:-3],
                 "scenarios": SCENARIO.findall(text),
-                "automated": [{"repo": r, "test": tn} for r, tn in AUTOMATED.findall(text)],
+                "automated": [{"repo": r, "test": tn, "needle": test_needle(tn)}
+                              for r, tn in AUTOMATED.findall(text)],
             })
     return out
 
@@ -108,10 +136,17 @@ def find_test(repo, name):
     to be a repository of its own is not a reason to declare a test missing, and a check on the
     file name alone would do exactly that for every test function that does not have a file to
     itself.
+
+    MARKDOWN IS NEVER A TEST, and excluding it is what makes this check able to fail at all. When a
+    project keeps its documentation in the same repository as its code - the layout this format
+    recommends first - the name of the test occurs in the very document that names it. Searching
+    everything found that document, reported the test as present, and went on reporting it as
+    present after the test had been renamed away. The check answered a question about itself.
     """
     if os.path.isdir(os.path.join(repo, ".git")):
         try:
-            hit = subprocess.run(["git", "grep", "-l", "-w", "-F", "-e", name],
+            hit = subprocess.run(["git", "grep", "-l", "-w", "-F", "-e", name,
+                                  "--", ":(exclude)*.md"],
                                  cwd=repo, capture_output=True, text=True, timeout=30)
         except (OSError, subprocess.SubprocessError):
             return None, None
@@ -125,6 +160,8 @@ def find_test(repo, name):
     for base, dirs, files in os.walk(repo):
         dirs[:] = [d for d in dirs if d not in IGNORED_DIRS and not d.startswith(".")]
         for f in sorted(files):
+            if f.endswith(".md"):
+                continue                   # see the docstring: a document is not evidence
             full = os.path.join(base, f)
             rel = os.path.relpath(full, repo).replace(os.sep, "/")
             if os.path.splitext(f)[0] == stem:
@@ -137,13 +174,21 @@ def find_test(repo, name):
 def verify(items, repos_root):
     for item in items:
         for a in item["automated"]:
-            repo = os.path.join(repos_root, a["repo"])
-            if not os.path.isdir(repo):
+            # No repository named means "somewhere in what was given", which is the normal case for
+            # a project documented in its own repository.
+            candidates = ([os.path.join(repos_root, a["repo"])] if a["repo"]
+                          else [os.path.join(repos_root, n) for n in sorted(os.listdir(repos_root))
+                                if os.path.isdir(os.path.join(repos_root, n))])
+            candidates = [c for c in candidates if os.path.isdir(c)]
+            if not candidates:
                 a["found"] = None          # the repository is not here - nothing was checked
                 continue
-            found, at = find_test(repo, a["test"])
-            a["found"] = found
-            a["at"] = at
+            a["found"], a["at"] = False, ""
+            for candidate in candidates:
+                found, at = find_test(candidate, a["needle"])
+                if found:
+                    a["found"], a["at"] = True, at
+                    break
     return items
 
 
