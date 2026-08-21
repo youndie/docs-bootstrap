@@ -32,13 +32,13 @@ jobs:
 
       - run: pip install pyyaml
 
-      - run: make check
-
-      # Pull requests only, and only when the backlog is a file per item: the number that was free
-      # when this branch was cut may since have been taken by a branch that merged first. Each pull
-      # request is green on its own — inside either branch there is no duplicate — and the
-      # collision appears after the **second** merge, on the default branch, by which time the
-      # number is already quoted from code and from other documents.
+      # BEFORE `make check`, and that order is the whole value of this step. Both checks catch a
+      # number taken twice, but this one says *which branch took it and under what name*, while the
+      # gate says `duplicate ids: B-06`. A failing step stops the job, so whichever runs first is
+      # the message the author gets.
+      #
+      # Pull requests only, and only when the backlog is a file per item. Read the note below
+      # before deciding whether you need it at all.
       #
       # The refspec is explicit on purpose: `git fetch origin main` moves FETCH_HEAD and creates no
       # remote-tracking ref, so the next line would fail with "could not read origin/main". The
@@ -49,6 +49,22 @@ jobs:
           git fetch --no-tags origin \
             "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
           python3 scripts/backlog_index.py --against "origin/$GITHUB_BASE_REF"
+
+      # WHEN THE STEP ABOVE IS WORTH HAVING. It pays for itself only if the generated index is not
+      # committed from the branch — for instance when the default branch rebuilds and commits it
+      # itself. If every branch commits the regenerated `backlog.md`, then two branches that each
+      # add an item always conflict in that one file, and two things follow, both observed:
+      #
+      #   * a pull request that cannot be merged gets no `pull_request` run at all, so this step
+      #     does not run precisely when the branches have diverged most;
+      #   * once the conflict is resolved, the ordinary duplicate-id check inside `make check`
+      #     catches the collision anyway.
+      #
+      # So with a branch-committed index the conflict is the real guard and this step is a
+      # backstop. Keep it — it is cheap and it explains itself better — but do not rely on it as
+      # the only thing standing between two branches and one number.
+
+      - run: make check
 
       # Default branch only. `status: draft` is legal in a pull request, where it means "this
       # branch will make it true", and a defect the moment it merges.

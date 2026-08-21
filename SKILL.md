@@ -204,10 +204,15 @@ Without this step the documents exist and nobody opens them.
      from its sources when something outside the listed paths moves, and a new directory is a list
      nobody remembers to update.
    * **Two checks are branch-specific.** `status: draft` is an error only on the default branch,
-     because in a pull request it is the normal state. And a backlog item number that was free when
-     the branch was cut may have been taken by a branch that merged first — each pull request is
-     green alone, and the collision appears after the *second* merge, when the number is already
-     quoted from code.
+     because in a pull request it is the normal state. The other compares backlog item numbers with
+     the base branch, and how much it buys depends on a decision made elsewhere: if every branch
+     commits the regenerated index, two branches adding items always conflict in that one file, and
+     the conflict — not this check — is what stops them. It earns its keep when the index is
+     rebuilt on the default branch instead. Either way it runs **before** `make check`, because
+     both catch the collision and only one of them says which branch took the number.
+   * **A pull request that cannot be merged runs no `pull_request` workflows at all.** Nothing is
+     reported and nothing is red; the checks are simply absent, exactly when the branches have
+     diverged most. Anything gated on that event is a backstop rather than a guarantee.
    * **Anchors run on a schedule, not on a pull request, and do not block.** They rot because
      somebody refactored a different repository, so a pull request here is the least likely moment
      for one to break — and a red build nobody caused is a build people learn to ignore.
