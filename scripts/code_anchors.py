@@ -292,9 +292,15 @@ def main():
 
     trees = load_trees(os.path.abspath(args.repos), skip=[root])
     if not trees:
-        print("no repository directories under {0} - nothing to check against".format(args.repos),
-              file=sys.stderr)
-        return 2
+        # The same answer as "--repos was not given", because it is the same situation: nothing was
+        # checked, and that is said out loud rather than dressed up as a pass. It used to exit 2,
+        # which made `make check` red in a separate documentation repository — there the clones
+        # exist only inside CI, so every contributor saw a failure caused by a directory that is
+        # not supposed to be there. A report that fails the gate stops being read, and takes the
+        # gate with it. Only --check, which is a request to assert, turns this into an error.
+        print("no repository directories under {0} - their existence was NOT checked. "
+              "That is not the same as \"they are all there\".".format(args.repos))
+        return 2 if args.check else 0
 
     svc2repo = repo_by_service(root)
     for a in anchors:

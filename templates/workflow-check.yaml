@@ -94,7 +94,12 @@ jobs:
 
       # For a separate documentation repository, replace the step above with shallow clones of the
       # services. History is not needed — only the file tree — and a repository that cannot be
-      # cloned is a warning rather than a failure, because its anchors are simply unchecked:
+      # cloned is a warning rather than a failure, because its anchors are simply unchecked.
+      #
+      # `secrets.GITHUB_TOKEN` is scoped to the repository running the workflow. That is enough for
+      # public services, which is how the block below was tested; a private one needs a token that
+      # can read it, and with the default one it will take the warning branch every week without
+      # ever saying why.
       #
       #   - run: |
       #       mkdir -p repos && cd repos
