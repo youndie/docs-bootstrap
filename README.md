@@ -26,7 +26,7 @@ not.
 |---|---|
 | [SKILL.md](SKILL.md) | the skill: how an agent bootstraps or extends this documentation for a repository |
 | [SPEC.md](SPEC.md) | the format contract — layers, frontmatter, anchors, `spec_version: 1` |
-| [templates/](templates/) | one template per document type |
+| [templates/](templates/) | one template per document type, plus the CI workflow to copy |
 | [scripts/](scripts/) | the checks: link graph, coverage map, backlog index, code anchors, BDD count |
 | [example/](example/) | a complete worked instance — a small library lending system, code and docs |
 | [WORKFLOW.md](WORKFLOW.md) | the docs-first process the format grew out of; optional |

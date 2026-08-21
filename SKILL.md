@@ -193,20 +193,24 @@ Without this step the documents exist and nobody opens them.
    session" section: research → backlog → the layer document the task belongs to. This is the
    single highest-leverage line in the whole exercise.
 2. **The product README** links to `docs/` in one line.
-3. **CI** runs the same checks a contributor runs locally. A local set that differs from the CI set
-   turns "green here, red there" into the normal state of affairs and people stop reading either.
+3. **CI** — copy [templates/workflow-check.yaml](templates/workflow-check.yaml) to
+   `.github/workflows/check.yaml`. Do not write one from memory: four of the decisions in it are
+   not the obvious ones, and each was paid for.
 
-On a pull request, add the one check that cannot run locally:
-
-```bash
-git fetch --no-tags origin "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
-python3 scripts/backlog_index.py --against "origin/$GITHUB_BASE_REF"
-```
-
-An ordinary duplicate check only sees collisions inside one state of the repository. Two pull
-requests that took the same item number are each green on their own, and the duplicate appears
-after the **second** merge — the default branch turns red, after the fact, with the wrong number
-already quoted from code and documents.
+   * It runs `make check` — the same target a contributor runs. A local set that differs from the
+     CI set turns "green here, red there" into the normal state of affairs, and then neither is
+     read.
+   * **No path filters.** They save seconds and buy red default branches: a generated file diverges
+     from its sources when something outside the listed paths moves, and a new directory is a list
+     nobody remembers to update.
+   * **Two checks are branch-specific.** `status: draft` is an error only on the default branch,
+     because in a pull request it is the normal state. And a backlog item number that was free when
+     the branch was cut may have been taken by a branch that merged first — each pull request is
+     green alone, and the collision appears after the *second* merge, when the number is already
+     quoted from code.
+   * **Anchors run on a schedule, not on a pull request, and do not block.** They rot because
+     somebody refactored a different repository, so a pull request here is the least likely moment
+     for one to break — and a red build nobody caused is a build people learn to ignore.
 
 ### 9. Run the checks and fix what they find
 
