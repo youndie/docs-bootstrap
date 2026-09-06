@@ -1,6 +1,9 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended"
-  ]
+  "description": [
+    "The portfolio's Renovate configuration lives in sborka and is extended by name, so this repository stops being one more copy to keep in step.",
+    "Most of the preset is inert here — there is no Gradle build, so the kotlin, kotlinx and sborka groups match nothing. What does apply is the part this repository actually needs: one Monday batch, `ci actions` as one pull request instead of one per action (#2, #3 and #5 are three pull requests for one question — does the check still pass), majors labelled and left to a human, and vulnerability alerts off-schedule.",
+    "Automerge is a separate preset (`github>youndie/sborka:automerge-harness`) and is not extended here: nothing merges itself today. Its precondition holds — check.yaml runs on `pull_request` — and this is a likelier candidate than most, since the harness is nearly all this repository has to update."
+  ],
+  "extends": ["github>youndie/sborka"]
 }
