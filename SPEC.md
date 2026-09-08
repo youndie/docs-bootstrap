@@ -150,6 +150,33 @@ source: <repo>/<path to the feature directory in code>
 `source` is the single most useful field in the file: it is the directory the agent opens first.
 Screen states are listed from the actual state class, with field names copied from it.
 
+#### 3.2.1 `design` (optional)
+
+A screen that was built to a design carries where that design is and how its states map onto it:
+
+```yaml
+design:
+  canvas: <url>                        # where the design lives; free text for a person
+  references: <repo>/<directory>       # in the code: one PNG per state, named like the screenshot fixture
+  states:                              # section-1 state -> reference stem in that directory
+    empty: CatalogSearch_empty
+    content: CatalogSearch_content
+```
+
+`references` is a code anchor like any other and rots the same way, so `code_anchors.py` checks
+`<references>/<stem>.png` for every entry of `states`. `docs_check.py` checks the other direction:
+every key of `states` names a state listed in section 1 of the document (the bold name of a
+`- [ ] **state:**` line, backticks ignored, case-insensitive), because a design of a state the
+document does not know is either a state the document forgot or an artboard nobody implements. A
+listed state without a design entry is a warning, not an error - a loading spinner rarely gets an
+artboard.
+
+The stems are what the screenshot tool names its files (`[A-Za-z0-9_.-]` only), so that the same
+name identifies the artboard, the reference PNG and the fixture; `viddikDesignParity` in the
+Compose toolchain reads exactly this directory. The numbers a parity run produces stay in the pull
+request that produced them, not in the document: a percentage written here is wrong after the
+next commit, and the check that would notice does not exist.
+
 A conversational flow is a client too. `type: client_flow` keeps it in the same layer instead of
 inventing a fifth one; the sections adapt (UI elements → dialog steps, screen states → FSM states).
 

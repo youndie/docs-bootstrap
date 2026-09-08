@@ -99,6 +99,15 @@ HUB_LINK = re.compile(r"\]\((?!https?:)([^)#\s]+\.md)")
 
 SCENARIO = re.compile(r"^###\s+Scenario:", re.M)
 
+# A screen state as section 1 of a screen document lists it: `- [ ] **Empty:** ...`,
+# `- [x] **`idle`:** ...`, `- [x] **Blocked (`blocked: true`, orthogonal to `status`):** ...`.
+# The name is the bold text up to its first space or bracket, backticks dropped, compared
+# case-insensitively - loose enough to survive the prose around it, strict enough that a
+# `design.states` key has to be spelled the way the document spells the state.
+STATE_LINE = re.compile(r"^\s*[-*]\s+\[[ xX]\]\s+\*\*(.+?):?\*\*", re.M)
+# What a screenshot tool can name a file, and therefore what a reference stem may be.
+REFERENCE_STEM = re.compile(r"^[A-Za-z0-9_.-]+$")
+
 # There is deliberately no pattern for `**Automated:**` here. How many scenarios carry a link to a
 # test has exactly one owner, bdd_report.py, which needs the shape of that line anyway in order to
 # go looking for the test. Counting it in both places is how the two came to disagree: a bare
@@ -175,6 +184,54 @@ def refs(fm, field):
             if isinstance(x, str) and x.strip() and not x.strip().startswith("<")]
 
 
+def state_name(bold):
+    """`Blocked (`blocked: true`, orthogonal to `status`)` -> `blocked`; `idle` -> `idle`."""
+    return re.split(r"[\s(]", bold.replace("`", "").strip(), 1)[0].lower()
+
+
+def listed_states(text):
+    return {state_name(m) for m in STATE_LINE.findall(text) if state_name(m)}
+
+
+def check_design(path, fm, text, errors, warns):
+    """The `design:` block of a screen (SPEC 3.2.1): its states have to be the document's states.
+
+    The block ties three names together - the artboard, the reference PNG and the fixture - and
+    the only one this script can see is the document's own list of states. A design entry for a
+    state the document does not list is a state the document forgot or an artboard nobody
+    implements; either way it is an error here, because the other tools take the block at its
+    word. Whether the PNGs exist is code_anchors.py's question.
+    """
+    design = fm.get("design")
+    if design is None:
+        return
+    if not isinstance(design, dict):
+        errors.append((path, "design-shape", "design must be a mapping with references and states"))
+        return
+    for field in ("references", "states"):
+        if not design.get(field):
+            errors.append((path, "design-shape", "design.{0} is missing".format(field)))
+    states = design.get("states")
+    if not isinstance(states, dict):
+        if states:
+            errors.append((path, "design-shape", "design.states must map state -> reference stem"))
+        return
+    known = listed_states(text)
+    for state, stem in states.items():
+        if state_name(str(state)) not in known:
+            errors.append((path, "design-unknown-state",
+                           "design.states names {0!r}, which section 1 does not list "
+                           "(it lists: {1})".format(state, ", ".join(sorted(known)) or "nothing")))
+        if not isinstance(stem, str) or not REFERENCE_STEM.match(stem):
+            errors.append((path, "design-bad-stem",
+                           "design.states[{0!r}] = {1!r} is not a file stem a screenshot tool "
+                           "would produce ([A-Za-z0-9_.-] only)".format(state, stem)))
+    for state in sorted(known - {state_name(str(k)) for k in states}):
+        warns.append((path, "design-gap",
+                      "state {0!r} has no design entry - no artboard, or not mapped yet"
+                      .format(state)))
+
+
 def check(docs, root, hub, on_main=False):
     errors, warns, info = [], [], []
     ids = {d["fm"].get("id") or d["stem"] for d in docs.values()}
@@ -247,6 +304,9 @@ def check(docs, root, hub, on_main=False):
         for link in set(MD_LINK.findall(d["text"])):
             if not os.path.isfile(os.path.join(root, link)):
                 errors.append((path, "broken-link", "link to {0}".format(link)))
+
+        if d["layer"] == "screens":
+            check_design(path, fm, d["text"], errors, warns)
 
         if not CODE_ANCHOR.search(d["text"]):
             msg = ("not a single path into the code - the implementation cannot be "

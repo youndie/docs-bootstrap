@@ -182,6 +182,33 @@ def load_trees(repos_root, skip=()):
     return trees
 
 
+# The `design:` block of a screen document (SPEC 3.2.1), read without a YAML parser: this script
+# has none and the block is three fixed keys deep. `references` is the directory, `states` the
+# indented `name: stem` lines under it, and each `<references>/<stem>.png` is an anchor - the
+# reference PNGs live in the code repository next to the goldens and rot with a rename like any
+# other path, only nobody writes them in backticks.
+DESIGN_BLOCK = re.compile(r"^design:\s*\n((?:[ \t]+\S.*\n)+)", re.M)
+DESIGN_REFERENCES = re.compile(r"^[ \t]+references:\s*[\"']?([^\"'\s#]+)", re.M)
+DESIGN_STATES = re.compile(r"^[ \t]+states:\s*\n((?:[ \t]+\S.*\n)+)", re.M)
+DESIGN_STATE = re.compile(r"^[ \t]+[^\s:#][^:#]*:\s*[\"']?([A-Za-z0-9_.-]+)[\"']?\s*(?:#.*)?$", re.M)
+
+
+def design_anchors(text):
+    """`<references>/<stem>.png` for every state the design block maps."""
+    front = text.split("---", 2)
+    if len(front) < 3:
+        return []
+    block = DESIGN_BLOCK.search(front[1])
+    if not block:
+        return []
+    ref = DESIGN_REFERENCES.search(block.group(1))
+    states = DESIGN_STATES.search(block.group(1))
+    if not ref or not states:
+        return []
+    base = ref.group(1).rstrip("/")
+    return ["{0}/{1}.png".format(base, stem) for stem in DESIGN_STATE.findall(states.group(1))]
+
+
 def collect_anchors(root):
     """The anchors of every document, with a guess at the service from the table row."""
     anchors = []
@@ -206,6 +233,10 @@ def collect_anchors(root):
                     "doc": doc, "path": p, "shortened": bool(dots),
                     "service_hint": in_table.get(p, ""),
                 })
+            if folder == "screens":
+                for p in design_anchors(text):
+                    anchors.append({"doc": doc, "path": p, "shortened": False,
+                                    "service_hint": "", "design": True})
     return anchors
 
 

@@ -11,6 +11,15 @@ calls_api:
   - endpoint-catalog
   - endpoint-loans
 source: librarian-web/src/pages
+design:
+  canvas: https://example.invalid/design/librarian-catalogue   # the canvas is not public; the PNGs are
+  references: librarian-web/design
+  states:
+    idle: CatalogSearch_idle
+    loading: CatalogSearch_loading
+    content: CatalogSearch_content
+    empty: CatalogSearch_empty
+    error: CatalogSearch_error
 ---
 
 # Screen: Catalogue search

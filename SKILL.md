@@ -141,8 +141,12 @@ Common to every layer:
 * **Language: the project's.** Identifiers, URLs and HTTP header names verbatim as in the code.
 
 Useful optional documents: `infrastructure.md` for everything that lives *between* services and
-therefore fits in none of them (environments, domains, credentials, deploy triggers), `design/` for
-mockups, `workflow.md` if the process is not the obvious one.
+therefore fits in none of them (environments, domains, credentials, deploy triggers), `workflow.md`
+if the process is not the obvious one. A screen built to a design does not get a `design/` folder
+of mockups; it gets a `design:` block in its frontmatter (SPEC §3.2.1) pointing at the canvas and
+at the directory in the code where one reference PNG per state lives, with a state → stem map that
+the checker holds against section 1. The PNGs are code, kept next to the screenshot goldens, and
+the parity numbers stay in the pull request that measured them.
 
 For each document: copy the template, fill the frontmatter, then fill the body from what you read
 in the code.
