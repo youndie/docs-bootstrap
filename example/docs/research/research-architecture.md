@@ -56,6 +56,26 @@ so nothing can announce it — a position is only ever true at the moment it is 
 acceptable while the only reader is a librarian on the phone, and it is the whole question in
 [B-02](../backlog/B-02-store-hold-positions.md).
 
+### 1.2a A `409` from the HTTP client is retried, and the retry is not idempotent
+
+Verified by unpacking the pinned dependency rather than by reading its documentation, because the
+documentation describes the default policy and the pin is two minors behind it.
+
+| Fact | Where verified |
+|---|---|
+| `Retry` retries on every 4xx-with-`Retry-After`, `409` included | `httpx-0.27.2-py3-none-any.whl!/httpx/_transports/default.py` — `HTTPTransport.handle_request` |
+| `create_loan` is not idempotent: a second call makes a second loan | `loans-service/src/loans_service/routes/loans.py` — `create_loan` |
+
+**Consequence.** A `409` under retry can double-book a copy, and the two facts are individually
+harmless — which is why this needed both an unpacked artefact and a route read side by side. The
+route needs an idempotency key, or the pin needs a policy that does not retry `409`; neither is
+written yet, and saying so is cheaper than a document that implies one of them is.
+
+**Note the address form** (SPEC §4.1): a path inside an artefact carries the artefact before a `!/`,
+so the checker reports it as verified-by-unpacking rather than as a rotten anchor it could never
+resolve. Written as the bare path alone it would sit in the rot list for ever — and would be
+indistinguishable, to a reader, from a file that had genuinely been renamed.
+
 ### 1.3 "Overdue" is derived from the due date, never stored
 
 Verified in `loans-service/src/loans_service/domain/loan.py`: `Loan.state()` returns `overdue` when

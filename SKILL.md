@@ -158,7 +158,17 @@ the documentation worth having for an agent, and it is the one structural rule t
 enforces. Point at the feature directory or the key file — not at a line number, which moves.
 
 The one exception is research, which legitimately predates the code; there the checker warns
-instead of failing, and what you cite is the artefact you verified against.
+instead of failing, and what you cite is the artefact you verified against — **as an address inside
+it**, with the separator a jar URL uses:
+
+```
+ktor-server-core-3.5.2.klib!/commonMain/io/ktor/server/engine/ShutdownHook.kt
+```
+
+Written as a bare path, that line is reported rotten for ever, because no tree here holds it; written
+this way it is reported as what it is. The left side has to name something a reader can fetch — a
+versioned file, a coordinate, or `owner/repo` — so the notation cannot be used to quiet an anchor
+that really has rotted. [SPEC §4.1](SPEC.md).
 
 ### 5. BDD scenarios are acceptance criteria
 

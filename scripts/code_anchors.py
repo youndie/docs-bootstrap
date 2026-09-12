@@ -25,6 +25,24 @@ file or directory whose path ends with the fragment. Such a check can report a f
 files with the same name in different modules); a false "missing" it practically cannot produce.
 For the job at hand - catching rot - the bias is chosen deliberately.
 
+ADDRESSES INSIDE SOMETHING THIS TREE DOES NOT HOLD. Research verifies facts by unpacking a
+dependency's artefact and reading the source in it, and that address is not a path any search over
+sibling repositories can resolve - it can only ever be reported missing. Reported missing for ever,
+it trains the reader to skip the list, and the one anchor in it that is a real defect goes with it.
+
+Such an address is written with the separator every jar URL uses:
+
+    ktor-server-core-3.5.2.klib!/commonMain/io/ktor/server/engine/ShutdownHook.kt
+    io.github.smyrgeorge:sqlx4k:1.13.0!/commonMain/.../ConnectionPool.kt
+    kubernetes/website@v1.31!/content/en/docs/concepts/workloads/pods/pod-lifecycle.md
+
+and is reported in its own section, not as rot.
+
+THE LEFT SIDE MUST NAME SOMETHING FETCHABLE, and that constraint is what keeps this from being a
+way to silence any anchor at all. A versioned file, a Maven coordinate, or `owner/repo` (optionally
+`@ref`) can be fetched by a reader who wants to check the claim; "Ktor" cannot. An address whose
+left side does not is reported as **missing**, saying so - a narrow escape hatch, deliberately.
+
 Which repository to look in is decided by the "Service" column of the anchor table: a service id
 leads to `<docs>/services/<id>.md`, whose `repo_url` gives the name of the clone (its last path
 segment). If that fails, the path is looked for in every repository at once - and then the report
@@ -52,6 +70,20 @@ PATH_RE = re.compile(r"`(\.{3}/)?([A-Za-z0-9_.-][A-Za-z0-9_./{}<>*-]*/[A-Za-z0-9
 TABLE_ROW = re.compile(r"^\|\s*([^|]+?)\s*\|\s*(.+?)\s*\|\s*$", re.M)
 # Fragments there is nothing to check against: patterns and substitutions.
 WILDCARD = re.compile(r"[*{}<>]")
+
+# `<what>!/<path inside it>` - see the module docstring. `!` cannot occur in the path regex above,
+# so these are collected by their own pattern rather than falling out of it.
+EXTERNAL_RE = re.compile(r"`([^`\s!]+)!/([^`]+)`")
+
+# What the left side may be. Each alternative is something a reader can actually obtain; that is the
+# whole test, because an address nobody can reach is not an address.
+FETCHABLE = re.compile(
+    r"^[\w.-]+:[\w.-]+:[\w.+-]+$"                                      # a Maven/Gradle coordinate
+    r"|^[\w.+-]+\.(jar|klib|aar|war|zip|whl|nupkg|gem|crate|apk|tgz)$"   # a packaged file
+    r"|^[\w.+-]+\.tar\.gz$"
+    r"|^[\w.+-]*-\d[\w.+-]*$"                                          # kotlin-native-2.4.10
+    r"|^[\w.-]+/[\w.-]+(@[\w.-]+)?$"                                   # owner/repo, optionally @ref
+)
 
 # Not everything with a slash in backticks is a path. What is obviously not one is filtered out,
 # otherwise the report drowns in noise: MIME types, slash-separated enumerations, host names.
@@ -233,6 +265,15 @@ def collect_anchors(root):
                     "doc": doc, "path": p, "shortened": bool(dots),
                     "service_hint": in_table.get(p, ""),
                 })
+            # Addresses inside an artefact or a repository nobody clones here. Collected separately
+            # because `!` is not in PATH_RE's character class: without this they were not reported as
+            # anything at all, which is worse than reporting them wrongly - an address the checker
+            # cannot see is one nobody is told it is not checking.
+            for what, inside in EXTERNAL_RE.findall(text):
+                anchors.append({
+                    "doc": doc, "path": "{0}!/{1}".format(what, inside), "shortened": False,
+                    "service_hint": "", "external": what,
+                })
             if folder == "screens":
                 for p in design_anchors(text):
                     anchors.append({"doc": doc, "path": p, "shortened": False,
@@ -242,6 +283,20 @@ def collect_anchors(root):
 
 def resolve(anchor, trees, svc2repo):
     """Looks the anchor up: first in the repository the hint names, then in all of them."""
+    what = anchor.get("external")
+    if what:
+        # A placeholder is a pattern, not an address, and the notation is documented with one -
+        # `<artefact>!/<path>` - so a document that explains the form would otherwise be reported for
+        # explaining it. Same rule as for ordinary paths, applied a few lines later.
+        if WILDCARD.search(anchor["path"]):
+            return {"status": "skipped", "why": "a pattern, not an address"}
+        # No tree here holds it, and that is the point of the notation rather than a gap in it. What
+        # IS checked is that the left side names something a reader can fetch - see FETCHABLE.
+        if FETCHABLE.match(what):
+            return {"status": "external", "what": what}
+        return {"status": "missing",
+                "why": "'{0}' does not name a fetchable artefact or repository - use a versioned "
+                       "file, a coordinate, or owner/repo".format(what)}
     raw = anchor["path"]
     is_dir = raw.endswith("/")     # remember BEFORE trimming: below there is no slash any more
     p = raw.rstrip("/")
@@ -340,17 +395,19 @@ def main():
     missing = [a for a in anchors if a["status"] == "missing"]
     skipped = [a for a in anchors if a["status"] == "skipped"]
     found = [a for a in anchors if a["status"] == "found"]
+    external = [a for a in anchors if a["status"] == "external"]
 
     if args.json:
         print(json.dumps({"total": len(anchors), "found": len(found),
                           "missing": len(missing), "skipped": len(skipped),
+                          "external": len(external),
                           "repos": sorted(trees), "anchors": anchors},
                          ensure_ascii=False, indent=2))
         return 1 if (missing and args.check) else 0
 
     print("Repositories: {0}".format(", ".join(sorted(trees))))
-    print("Anchors: {0} - found {1}, not found {2}, skipped {3}\n"
-          .format(len(anchors), len(found), len(missing), len(skipped)))
+    print("Anchors: {0} - found {1}, not found {2}, inside artefacts {3}, skipped {4}\n"
+          .format(len(anchors), len(found), len(missing), len(external), len(skipped)))
 
     if missing:
         by_doc = {}
@@ -363,8 +420,24 @@ def main():
             for a in by_doc[doc]:
                 mark = " (abbreviated)" if a["shortened"] else ""
                 print("      {0}{1}".format(a["path"], mark))
+                if a.get("why"):
+                    print("          {0}".format(a["why"]))
                 for at in a.get("moved_to", []):
                     print("          possibly now: {0}/{1}".format(a["moved_repo"], at))
+        print()
+    if external:
+        by_doc = {}
+        for a in external:
+            by_doc.setdefault(a["doc"], []).append(a)
+        print("INSIDE AN ARTEFACT, OR A REPOSITORY NOT CHECKED OUT HERE")
+        print("-" * 72)
+        print("  Verified by unpacking the thing named before `!/`, not by finding a file. Not rot,")
+        print("  and never counted as such - but each one names something a reader can fetch and")
+        print("  check, which is the only reason it is allowed to sit outside the search.")
+        for doc in sorted(by_doc):
+            print("  {0}".format(doc))
+            for a in by_doc[doc]:
+                print("      {0}".format(a["path"]))
         print()
     if skipped:
         print("Skipped as patterns: {0}\n"

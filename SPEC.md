@@ -346,6 +346,31 @@ but practically never a false "missing", and the job of the check is to catch ro
 
 Paths in backticks that contain `*`, `{`, `<` or `>` are treated as patterns and skipped.
 
+### 4.1 Addresses inside something the tree does not hold
+
+Research verifies facts by unpacking a dependency's artefact and reading the source inside it. That
+address is not a path: no search over sibling repositories can ever resolve it, so it is reported
+missing for ever — and a list that is permanently non-zero teaches the reader to skip it, taking the
+one entry in it that is a real defect along with it.
+
+Such an address uses the separator every jar URL already uses:
+
+```
+ktor-server-core-3.5.2.klib!/commonMain/io/ktor/server/engine/ShutdownHook.kt
+io.github.smyrgeorge:sqlx4k:1.13.0!/commonMain/.../ConnectionPool.kt
+kubernetes/website@v1.31!/content/en/docs/concepts/workloads/pods/pod-lifecycle.md
+```
+
+The checker reports these in their own section and never counts them as rot.
+
+**The left side must name something fetchable**, and that is what stops the notation from becoming a
+way to silence any inconvenient anchor. A versioned file, a Maven-style coordinate, or `owner/repo`
+(optionally `@ref`) can be obtained by a reader who wants to check the claim; `Ktor!/…` cannot, and
+is reported as **missing**, saying why. The escape hatch is deliberately too narrow to hide in.
+
+The rule this serves is the same one §4 opens with: an anchor exists so the reader reaches the thing
+in one hop. `ktor-server-core-3.5.2.klib!/…` is one hop. A bare path that no tree contains is none.
+
 ---
 
 ## 5. The coverage map
