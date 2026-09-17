@@ -263,6 +263,9 @@ def main():
                     help="verify only, write nothing; exit 1 if the index is stale")
     ap.add_argument("--against", metavar="REF",
                     help="check that no item number is already taken on REF (a git ref)")
+    ap.add_argument("--allow-missing", action="store_true",
+                    help="under --check, treat an absent backlog as nothing to check rather than "
+                         "as a failure (for a project that runs the gate before its first item)")
     args = ap.parse_args()
 
     _utf8_stdout()
@@ -274,7 +277,29 @@ def main():
 
     # A missing tree is a mode, not a failure: a project may have no backlog yet. Saying so is not
     # the same as saying that everything is in order, so it is said out loud.
+    #
+    # NOT UNDER A CHECK, THOUGH. `--check` and `--against` are run by a caller that already has a
+    # backlog - a step in `make check`, in a tree that committed one - so "the items are not there"
+    # is an answer to the question asked, not a mode to print on stdout before exiting 0. The
+    # failure this guards is not somebody deleting the backlog on purpose: it is a bad merge, a
+    # `git mv` that took the tree with it, or a `--docs` path that stopped matching after a layout
+    # change. Every one of those is the moment the check exists for, and every one of them used to
+    # pass in a log nobody opens on green.
+    #
+    # `--allow-missing` is the way out for the one caller that means it: a project running the gate
+    # before it has written its first item. A guard with no usable escape hatch is a guard somebody
+    # deletes in its first week.
     if not os.path.isdir(items_dir):
+        if (args.check or args.against) and not args.allow_missing:
+            # The flag that was actually passed, not a guess at it: a message naming --check to
+            # somebody who ran --against reads as a message about a different command.
+            asked = "--check" if args.check else "--against"
+            sys.stderr.write(
+                "no backlog items at {0}, and {1} says this repository has a backlog. "
+                "Moved, renamed, or is --docs pointing at the wrong tree? "
+                "Pass --allow-missing if a project without items yet is expected here.\n"
+                .format(items_dir, asked))
+            return 1
         print("no backlog items at {0} - nothing checked".format(items_dir))
         return 0
 
