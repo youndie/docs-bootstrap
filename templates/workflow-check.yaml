@@ -1,7 +1,18 @@
-# Copy to .github/workflows/check.yaml in the project being documented.
+# Copy to .github/workflows/check.yaml in the project being documented, and templates/Makefile to
+# the Makefile at its root. The two are one mechanism; neither works without the other.
 #
-# Written for the default layout — `docs/` inside the repository being documented — so `make check`
-# needs no arguments. For a separate documentation repository, see the notes on the anchors job.
+# Written for the default layout - `docs/` inside the repository being documented. For a separate
+# documentation repository, see the note on the anchors job.
+#
+# THE VERSION OF THE CHECKS IS WRITTEN HERE AND NOWHERE ELSE: the ref in the `uses:` lines below.
+# CI runs the checks at that ref because the runner resolves it; the Makefile reads the same line
+# and fetches the same ref for a local `make check`. Renovate's github-actions manager bumps it, so a
+# release of the checks arrives as one pull request that moves CI and every laptop together. Both
+# jobs name the same ref, and the Makefile refuses to guess when they do not.
+#
+# Do not replace the action with copied scripts to save a network fetch. That is how one portfolio
+# came to hold 18 copies of one script in three versions, eleven of them missing a guard that had
+# been fixed upstream for weeks.
 
 name: check
 
@@ -18,88 +29,49 @@ on:
   workflow_dispatch:
 
 jobs:
-  # The gate. Exactly the target a contributor runs: a local check set that differs from the CI one
-  # turns "green here, red there" into the normal state of affairs, and then neither is read.
+  # The gate. The action runs `make check` - exactly the target a contributor runs, so that "green
+  # here, red there" cannot become the normal state of affairs - and around it the two checks that
+  # depend on the event: on a pull request, backlog item numbers against the base branch, BEFORE the
+  # gate; on a push to the default branch, `status: draft` as an error. Why each sits where it does,
+  # and when the first is only a backstop, is written next to the step in the action's action.yml.
+  #
+  # Checks of the project's own belong in the Makefile under `gate`, not as steps here: then a
+  # contributor runs them too. Steps that need a toolchain the gate should not (a JDK for a
+  # formatter) go after this one, or in a job of their own.
   check:
     if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - run: pip install pyyaml
-
-      # BEFORE `make check`, and that order is the whole value of this step. Both checks catch a
-      # number taken twice, but this one says *which branch took it and under what name*, while the
-      # gate says `duplicate ids: B-06`. A failing step stops the job, so whichever runs first is
-      # the message the author gets.
-      #
-      # Pull requests only, and only when the backlog is a file per item. Read the note below
-      # before deciding whether you need it at all.
-      #
-      # The refspec is explicit on purpose: `git fetch origin main` moves FETCH_HEAD and creates no
-      # remote-tracking ref, so the next line would fail with "could not read origin/main". The
-      # check reads a tree rather than a history, so the shallow clone checkout makes is enough and
-      # `fetch-depth: 0` is not needed.
-      - if: github.event_name == 'pull_request'
-        run: |
-          git fetch --no-tags origin \
-            "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
-          python3 scripts/backlog_index.py --against "origin/$GITHUB_BASE_REF"
-
-      # WHEN THE STEP ABOVE IS WORTH HAVING. It pays for itself only if the generated index is not
-      # committed from the branch — for instance when the default branch rebuilds and commits it
-      # itself. If every branch commits the regenerated `backlog.md`, then two branches that each
-      # add an item always conflict in that one file, and two things follow, both observed:
-      #
-      #   * a pull request that cannot be merged gets no `pull_request` run at all, so this step
-      #     does not run precisely when the branches have diverged most;
-      #   * once the conflict is resolved, the ordinary duplicate-id check inside `make check`
-      #     catches the collision anyway.
-      #
-      # So with a branch-committed index the conflict is the real guard and this step is a
-      # backstop. Keep it — it is cheap and it explains itself better — but do not rely on it as
-      # the only thing standing between two branches and one number.
-
-      - run: make check
-
-      # Default branch only. `status: draft` is legal in a pull request, where it means "this
-      # branch will make it true", and a defect the moment it merges.
-      - if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        run: python3 scripts/docs_check.py --on-main
+      - uses: youndie/docs-bootstrap@v0.3.0
 
   # Separate from the gate, and on a schedule rather than on a pull request, because an anchor rots
   # when somebody refactors a **different** repository. A pull request here is the least likely
   # moment for one to break, and running it there trains people to ignore a red build they did not
   # cause. It also does not block: a path quoted *as obsolete* is indistinguishable from a live one
-  # by machine, so the report is read by a person. Add `--check` once the stale list reaches zero.
+  # by machine, so the report is read by a person. Pass `target: report ANCHORS_ARGS=--check` once
+  # the stale list reaches zero.
   anchors:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - run: pip install pyyaml
-
       # The code lives in this checkout, so its parent is a directory whose one subdirectory is
-      # this repository — which is exactly what --repos expects.
-      - run: python3 scripts/code_anchors.py --repos ..
+      # this repository - which is exactly what REPOS (`..` by default) expects.
+      - uses: youndie/docs-bootstrap@v0.3.0
+        with:
+          target: report
 
-      # For a separate documentation repository, replace the step above with shallow clones of the
-      # services. History is not needed — only the file tree — and a repository that cannot be
-      # cloned is a warning rather than a failure, because its anchors are simply unchecked.
+      # For a separate documentation repository, put shallow clones of the services next to the
+      # step above and point REPOS at them. History is not needed - only the file tree - and a
+      # repository that cannot be cloned is a warning rather than a failure, because its anchors are
+      # simply unchecked.
       #
       # `secrets.GITHUB_TOKEN` is scoped to the repository running the workflow. That is enough for
-      # public services, which is how the block below was tested; a private one needs a token that
-      # can read it, and with the default one it will take the warning branch every week without
-      # ever saying why.
+      # public services; a private one needs a token that can read it, and with the default one it
+      # will take the warning branch every week without ever saying why.
       #
       #   - run: |
       #       mkdir -p repos && cd repos
@@ -110,4 +82,6 @@ jobs:
       #       done
       #     env:
       #       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      #   - run: python3 scripts/code_anchors.py --repos repos
+      #   - uses: youndie/docs-bootstrap@v0.3.0
+      #     with:
+      #       target: report REPOS=repos

@@ -16,11 +16,14 @@ cannot find its subject and reports success is worse than no check.
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(SCRIPTS)
+TEMPLATE = os.path.join(REPO, "templates", "Makefile")
 
 
 def run(script, args, cwd):
@@ -28,6 +31,33 @@ def run(script, args, cwd):
         [sys.executable, os.path.join(SCRIPTS, script)] + args,
         cwd=cwd, capture_output=True, text=True)
     return result.returncode, (result.stdout + result.stderr)
+
+
+def make(args, cwd):
+    """The consumer's Makefile (templates/Makefile), run in a directory standing in for a project.
+
+    The environment is scrubbed of anything a calling make or a calling CI would leak in: MAKEFLAGS
+    carries the caller's command-line variables into every make below it, and a DOCS_BOOTSTRAP in
+    the environment would answer the very question the pin cases ask.
+    """
+    leak = {"MAKEFLAGS", "MFLAGS", "MAKELEVEL", "MAKEFILES", "DOCS_BOOTSTRAP", "DOCS", "BACKLOG",
+            "BACKLOG_FORM", "REPOS"}
+    env = {k: v for k, v in os.environ.items() if k not in leak}
+    result = subprocess.run(["make", "--no-print-directory", "-f", TEMPLATE] + args,
+                            cwd=cwd, env=env, capture_output=True, text=True)
+    return result.returncode, (result.stdout + result.stderr)
+
+
+def pinned_copy(project, ref):
+    """What a fetch of REF would leave behind, built from this checkout: the pin cases test how the
+    Makefile finds its checks, not GitHub, and must not need the network."""
+    cache = os.path.join(project, ".docs-bootstrap", ref)
+    os.makedirs(cache)
+    shutil.copy(os.path.join(REPO, "check.mk"), cache)
+    shutil.copytree(SCRIPTS, os.path.join(cache, "scripts"),
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(os.path.join(REPO, ".claude-plugin"), os.path.join(cache, ".claude-plugin"))
+    return os.path.realpath(cache)
 
 
 def write(root, rel, text):
@@ -164,6 +194,52 @@ def main():
         code, out = run("backlog_index.py", ["--against", "main"], empty)
         expect("backlog_index --against with no backlog", code, 1, out)
 
+    # -- the consumer's Makefile: no subject, no verdict --------------------------------------------
+    # Every script treats a missing tree as a mode and exits 0, as SPEC 7 requires of a tool; the
+    # gate is what knows the repository HAS documentation. These are the cases a copied root
+    # Makefile once passed in silence.
+    here = ["DOCS_BOOTSTRAP=" + REPO]
+    with tempfile.TemporaryDirectory() as project:
+        code, out = make(["docs-gate"] + here, project)
+        expect_true("the gate passed with no docs/ tree", code != 0 and "no docs tree" in out, out)
+
+        write(project, "docs/README.md", "# docs\n")
+        code, out = make(["docs-gate"] + here, project)
+        expect_true("the gate passed with BACKLOG_FORM=files and no item files",
+                    code != 0 and "BACKLOG_FORM=files" in out, out)
+
+        code, out = make(["docs-gate", "BACKLOG_FORM=bogus"] + here, project)
+        expect_true("the gate accepted BACKLOG_FORM=bogus", code != 0, out)
+
+        # The negative control: a tree that is there and a backlog declared absent pass the guard.
+        code, out = make(["docs-gate", "BACKLOG_FORM=none"] + here, project)
+        expect("the gate on docs/ with BACKLOG_FORM=none", code, 0, out)
+
+    # -- the consumer's Makefile: one pin, read from the workflow ------------------------------------
+    uses = "      - uses: youndie/docs-bootstrap@{0}\n"
+    with tempfile.TemporaryDirectory() as project:
+        code, out = make(["docs-bootstrap-path"], project)
+        expect_true("the Makefile ran with no pin to read", code != 0 and "uses:" in out, out)
+
+        # Both jobs name the same tag: one version. The answer is the fetched copy of that tag.
+        want = pinned_copy(project, "v9.9.9")
+        write(project, ".github/workflows/check.yaml", uses.format("v9.9.9") * 2)
+        code, out = make(["docs-bootstrap-path"], project)
+        expect_true("the Makefile did not take its checks from the pinned ref",
+                    code == 0 and out.strip() == want, out)
+
+        # The shape Renovate writes when it pins digests.
+        want = pinned_copy(project, "0123abc")
+        write(project, ".github/workflows/check.yaml", uses.format("0123abc # v9.9.9"))
+        code, out = make(["docs-bootstrap-path"], project)
+        expect_true("the Makefile did not read a digest pin",
+                    code == 0 and out.strip() == want, out)
+
+        # Two refs is two versions, and the Makefile does not pick one.
+        write(project, ".github/workflows/check.yaml", uses.format("v9.9.9") + uses.format("v9.9.8"))
+        code, out = make(["docs-bootstrap-path"], project)
+        expect_true("the Makefile chose between two pins", code != 0 and "more than one" in out, out)
+
     # -- scenarios nothing counts (SPEC 3.1) -------------------------------------------------------
     # The positive control: the fixture built to trip the warning trips it, and the exit code stays
     # 0 because it is a warning. Without this half the negative case below proves nothing - a
@@ -224,9 +300,9 @@ def main():
     if failures:
         sys.stderr.write("\n\n".join(failures) + "\n")
         return 1
-    print("script_selftest: every case passed - absent subjects refused, uncounted scenarios "
-          "reported, a shipped change without a version bump refused, and no guard fires on the "
-          "shape it allows")
+    print("script_selftest: every case passed - absent subjects refused by the scripts and by the "
+          "Makefile, the pin read once and never guessed, uncounted scenarios reported, a shipped "
+          "change without a version bump refused, and no guard fires on the shape it allows")
     return 0
 
 
