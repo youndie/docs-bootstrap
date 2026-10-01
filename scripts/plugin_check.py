@@ -116,6 +116,36 @@ def skill_name(path, problems):
     return str(fm["name"])
 
 
+def check_template_pins(root, plugin, problems):
+    """The version a template pins is the version that ships it.
+
+    templates/workflow-check.yaml names this repository as an action at a tag, and a project copies
+    that line as its pin. A template shipped at 0.4.0 that still says @v0.3.0 sets up every new
+    project one release behind, with the skill that set it up describing checks it is not running;
+    one that says @v0.5.0 pins a tag that may not exist yet. So the number lives in plugin.json and in the template, and this holds them equal: a
+    release that raises one and not the other fails here, in the pull request that makes it.
+    """
+    m = re.match(r"^https?://github\.com/([\w.-]+/[\w.-]+?)(?:\.git)?/?$",
+                 str(plugin.get("repository") or ""))
+    version = plugin.get("version")
+    templates = os.path.join(root, "templates")
+    if not m or not version or not os.path.isdir(templates):
+        return
+    # A `uses:` line, commented out or not - an example in a comment is copied as readily as a step.
+    # A placeholder (`@<tag>`) in prose is not a pin.
+    pin = re.compile(r"uses:\s*[\"']?" + re.escape(m.group(1)) + r"@([^\s\"'`<][^\s\"'`]*)")
+    for name in sorted(os.listdir(templates)):
+        path = os.path.join(templates, name)
+        if not os.path.isfile(path):
+            continue
+        with open(path, encoding="utf-8") as fh:
+            for ref in sorted(set(pin.findall(fh.read()))):
+                if ref != "v" + str(version):
+                    problems.append("templates/{0} pins {1}@{2}, and the version shipping it is {3} "
+                                    "- a project copying it would pin checks other than the ones its skill describes"
+                                    .format(name, m.group(1), ref, version))
+
+
 def check(root):
     problems = []
     plugin_dir = os.path.join(root, ".claude-plugin")
@@ -161,6 +191,8 @@ def check(root):
     if name and len(skill_names) == 1 and skill_names[0][1] != name:
         problems.append("plugin.json name is {0!r}, but the skill it ships is {1!r} ({2}/SKILL.md)"
                         .format(name, skill_names[0][1], skill_names[0][0]))
+
+    check_template_pins(root, plugin, problems)
 
     market_path = os.path.join(plugin_dir, "marketplace.json")
     if os.path.isfile(market_path):

@@ -297,12 +297,27 @@ def main():
         code, out = run("plugin_check.py", ["--root", repo, "--against", "no-such-ref"], repo)
         expect("plugin_check --against an unreadable ref", code, 1, out)
 
+    # -- the template's pin is the version that ships it ---------------------------------------------
+    with tempfile.TemporaryDirectory() as repo:
+        write(repo, "SKILL.md", "---\nname: x\ndescription: y\n---\n")
+        write(repo, ".claude-plugin/plugin.json",
+              '{"name": "x", "version": "0.2.0", "skills": ["."], '
+              '"repository": "https://github.com/someone/x"}\n')
+        write(repo, "templates/workflow-check.yaml", "      - uses: someone/x@v0.1.0\n")
+        code, out = run("plugin_check.py", ["--root", repo], repo)
+        expect("plugin_check: a template pinning the previous release", code, 1, out)
+
+        write(repo, "templates/workflow-check.yaml", "      - uses: someone/x@v0.2.0\n")
+        code, out = run("plugin_check.py", ["--root", repo], repo)
+        expect("plugin_check: a template pinning the shipping release", code, 0, out)
+
     if failures:
         sys.stderr.write("\n\n".join(failures) + "\n")
         return 1
     print("script_selftest: every case passed - absent subjects refused by the scripts and by the "
           "Makefile, the pin read once and never guessed, uncounted scenarios reported, a shipped "
-          "change without a version bump refused, and no guard fires on the shape it allows")
+          "change without a version bump and a template pinning another release refused, and no "
+          "guard fires on the shape it allows")
     return 0
 
 
