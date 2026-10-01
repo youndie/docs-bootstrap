@@ -45,6 +45,10 @@ Write these against the behaviour the code actually has: real status codes, real
 Mark an automated scenario with a link to its test — that is how it stays visible which checks are
 still manual.
 
+Each scenario gets its own `### Scenario: <name>` heading, in English whatever the language of the
+document — the heading is what the tools count. The steps under it are bullets, as below, or a
+fenced `gherkin` block; several scenarios in one block are counted as none.
+
 ### Scenario: <happy path>
 * **Given:** …
 * **When:** …

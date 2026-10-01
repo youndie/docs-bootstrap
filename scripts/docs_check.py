@@ -99,6 +99,32 @@ HUB_LINK = re.compile(r"\]\((?!https?:)([^)#\s]+\.md)")
 
 SCENARIO = re.compile(r"^###\s+Scenario:", re.M)
 
+# Scenarios that nothing counts. A scenario is counted by its `### Scenario:` heading and by nothing
+# else - here, in the INFO line at the end, and in bdd_report.py (SPEC 3.1). What sits under the
+# heading is free, and a fenced gherkin block is a perfectly good body for one. Without the heading
+# the same block is invisible: one tree carried fourteen scenarios in gherkin blocks under a single
+# `## Scenarios` heading, bdd_report printed 0, this script passed, and nothing anywhere was red or
+# even yellow. A report that says 0 about a document full of scenarios is not a gap in coverage, it
+# is a wrong number - and a wrong number nobody is told about gets quoted.
+#
+# A WARNING, NOT AN ERROR. The heading was the template's shape and the counters' assumption, but
+# until SPEC 3.1 said so it was not part of the contract, and documents written the other way are
+# valid v1 documents. Failing them now would make a v1 reader wrong in exactly the way SPEC 8 says a
+# version change is for. What was missing was never permission, it was being told.
+#
+# Three shapes are recognised, each one seen in a real tree:
+#   * a gherkin block whose section is not a `### Scenario:` one - several scenarios under one
+#     `## Scenarios`, or a heading in another language (`### Сценарий 1:`);
+#   * one block under a counted heading holding several `Scenario:` lines - counted as one;
+#   * a heading that says Scenario at another level or in another case - `#### Scenario:`.
+# A scenario written as plain prose under a heading in another language and with no block is not
+# recognised: there is nothing in it a machine can tell from any other paragraph.
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*([^\s`]*)")
+HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.*?)[ \t]*$")
+GHERKIN_INFO = {"gherkin", "feature", "cucumber"}
+GHERKIN_SCENARIO = re.compile(r"^\s*(?:Scenario(?: Outline| Template)?|Example)\s*:", re.M)
+SAYS_SCENARIO = re.compile(r"^scenario\b", re.I)
+
 # A screen state as section 1 of a screen document lists it: `- [ ] **Empty:** ...`,
 # `- [x] **`idle`:** ...`, `- [x] **Blocked (`blocked: true`, orthogonal to `status`):** ...`.
 # The name is the bold text up to its first space or bracket, backticks dropped, compared
@@ -186,7 +212,7 @@ def refs(fm, field):
 
 def state_name(bold):
     """`Blocked (`blocked: true`, orthogonal to `status`)` -> `blocked`; `idle` -> `idle`."""
-    return re.split(r"[\s(]", bold.replace("`", "").strip(), 1)[0].lower()
+    return re.split(r"[\s(]", bold.replace("`", "").strip(), maxsplit=1)[0].lower()
 
 
 def listed_states(text):
@@ -230,6 +256,61 @@ def check_design(path, fm, text, errors, warns):
         warns.append((path, "design-gap",
                       "state {0!r} has no design entry - no artboard, or not mapped yet"
                       .format(state)))
+
+
+def uncounted_scenarios(text):
+    """What in a document reads as scenarios to a person and as nothing to the counters.
+
+    Returns human-readable findings, empty when every scenario-shaped thing is countable. A section
+    is what Markdown makes it: a heading of level 1-3 opens one and the next such heading closes
+    it, so a `#### Steps` inside a `### Scenario:` keeps the block below it inside the scenario.
+    Fences are tracked so that a `#` line inside a code block is not mistaken for a heading.
+    """
+    found = []
+    outside = 0              # gherkin blocks in a section that is not a counted scenario
+    in_scenario = None       # the counted heading the current section belongs to, if any
+    inner = {}               # counted heading -> Scenario: lines in its blocks
+    fence, gherkin, body = None, False, []
+
+    for line in text.split("\n"):
+        if fence:
+            stripped = line.strip()
+            if stripped.startswith(fence) and set(stripped) == {fence[0]}:
+                if gherkin:
+                    if in_scenario is None:
+                        outside += 1
+                    else:
+                        inner[in_scenario] = (inner.get(in_scenario, 0)
+                                              + len(GHERKIN_SCENARIO.findall("\n".join(body))))
+                fence, gherkin, body = None, False, []
+            else:
+                body.append(line)
+            continue
+        m = FENCE.match(line)
+        if m:
+            fence, gherkin, body = m.group(1), m.group(2).lower() in GHERKIN_INFO, []
+            continue
+        h = HEADING.match(line)
+        if not h:
+            continue
+        counted = bool(SCENARIO.match(line))
+        if len(h.group(1)) <= 3:
+            in_scenario = line.strip() if counted else None
+        if not counted and SAYS_SCENARIO.match(h.group(2)):
+            found.append("`{0}` is not counted - the counters read `### Scenario:` and nothing "
+                         "near it".format(line.strip()))
+
+    crowded = [(heading, n) for heading, n in inner.items() if n > 1]
+    if outside:
+        found.insert(0, "{0} gherkin block{1} outside a `### Scenario:` heading - nothing that "
+                        "counts scenarios sees what is in {2}. Give each scenario its own "
+                        "`### Scenario: <name>` heading; the block can stay as its body"
+                        .format(outside, "" if outside == 1 else "s",
+                                "it" if outside == 1 else "them"))
+    for heading, n in crowded:
+        found.append("`{0}` holds {1} `Scenario:` lines in gherkin and is counted as one"
+                     .format(heading, n))
+    return found
 
 
 def check(docs, root, hub, on_main=False):
@@ -307,6 +388,14 @@ def check(docs, root, hub, on_main=False):
 
         if d["layer"] == "screens":
             check_design(path, fm, d["text"], errors, warns)
+
+        # Every layer, not features only: the counters count across all of them (see bdd_report.py
+        # on why), so a screen's scenarios in a gherkin block are as invisible as a feature's.
+        uncounted = uncounted_scenarios(d["text"])
+        if uncounted:
+            warns.append((path, "uncounted-scenarios",
+                          "{0} counted here; {1} (SPEC 3.1)"
+                          .format(len(SCENARIO.findall(d["text"])), "; ".join(uncounted))))
 
         if not CODE_ANCHOR.search(d["text"]):
             msg = ("not a single path into the code - the implementation cannot be "

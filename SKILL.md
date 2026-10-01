@@ -179,6 +179,11 @@ repositories are in play, or just the test when one is, in whatever form that pr
 (`tests/test_store.py::test_name` is fine). The absence of that line means the check is manual, and
 that asymmetry is worth seeing.
 
+Give every scenario its own `### Scenario: <name>` heading, in English even in a document written
+in another language: the heading is what the tools count. The steps under it may be the template's
+bullets or a fenced `gherkin` block. Several scenarios in one block are counted as none, and the
+report then says 0 about a document full of them ([SPEC.md §3.1](SPEC.md)).
+
 ### 6. Quirks sections are the highest-value content
 
 An empty logout handler, a hard-coded test domain, a fire-and-forget sync, state kept in memory

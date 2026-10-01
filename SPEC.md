@@ -129,6 +129,27 @@ either part are optional.
 parse the line anyway in order to go looking for the test. A second counter is how two checks in
 one run came to report 100% and 0% about the same file.
 
+**A scenario is counted by its heading, `### Scenario: <name>`, and by nothing else.** What sits
+under the heading is free: the bullets of the template, or the steps in a fenced `gherkin` block.
+
+````markdown
+### Scenario: A renewal is refused while somebody is waiting
+
+```gherkin
+Given an open loan on a copy of b-1 and one waiting hold on b-1
+When the librarian renews the loan
+Then the answer is 409 "renewal blocked by holds"
+```
+````
+
+The word `Scenario` is a marker for tools, like a frontmatter field name or `**Automated:**`, and
+stays as it is in a document written in another language. Several scenarios inside one gherkin
+block, a heading in another language, or a heading at another level are read by a person and
+counted by nothing: the report says the document has no scenarios, which is a wrong number rather
+than a low one. `docs_check.py` warns about each of these shapes (`uncounted-scenarios`). A warning
+and not an error, because documents written the other way were valid before this paragraph existed
+and remain valid v1 documents (§8); what they were missing was being told.
+
 ### 3.2 client_screen / client_flow
 
 Filename `screen-<name>.md` or `bot-flow-<name>.md`.
