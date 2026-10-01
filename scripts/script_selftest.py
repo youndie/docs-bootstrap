@@ -96,6 +96,35 @@ Then it works
 """
 
 
+PLUGIN = """{{
+  "name": "x",
+  "version": "{0}",
+  "skills": ["."]
+}}
+"""
+
+
+def git(cwd, *args):
+    """git with an identity of its own: the fixture must not depend on the machine's config, and a
+    commit signed by a hook or a missing user.email would fail for reasons that are not the check."""
+    return subprocess.run(
+        ["git", "-c", "user.name=selftest", "-c", "user.email=selftest@invalid",
+         "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main"] + list(args),
+        cwd=cwd, capture_output=True, text=True, check=True)
+
+
+def plugin_repo(root):
+    """A packaged skill with one commit, tagged `base` - what a pull request is compared with."""
+    write(root, "SKILL.md", "---\nname: x\ndescription: y\n---\n")
+    write(root, ".claude-plugin/plugin.json", PLUGIN.format("0.1.0"))
+    write(root, "scripts/a.py", "print('a')\n")
+    write(root, "README.md", "x\n")
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "base")
+    git(root, "tag", "base")
+
+
 def uncounted(tree):
     """docs_check's exit code and the `uncounted-scenarios` warnings it raised on a tree."""
     code, out = run("docs_check.py", ["--json", "--docs", os.path.join(tree, "docs")], tree)
@@ -155,11 +184,49 @@ def main():
         expect_true("docs_check warned about a gherkin block that is the body of a counted "
                     "heading", warned == [], out)
 
+    # -- a change that ships without a higher version (plugin_check --against) ---------------------
+    # The positive control first: a script changed and the version left alone is exactly the state
+    # this repository sat in for six weeks, and the check has to refuse it.
+    with tempfile.TemporaryDirectory() as repo:
+        plugin_repo(repo)
+        against = ["--root", repo, "--against", "base"]
+
+        write(repo, "scripts/a.py", "print('b')\n")
+        code, out = run("plugin_check.py", against, repo)
+        expect("plugin_check --against: a script changed, version not raised", code, 1, out)
+
+        write(repo, ".claude-plugin/plugin.json", PLUGIN.format("0.1.1"))
+        code, out = run("plugin_check.py", against, repo)
+        expect("plugin_check --against: a script changed, version raised", code, 0, out)
+
+        # Lowered is not raised.
+        write(repo, ".claude-plugin/plugin.json", PLUGIN.format("0.0.9"))
+        code, out = run("plugin_check.py", against, repo)
+        expect("plugin_check --against: version lowered", code, 1, out)
+
+        # A file nobody has added yet still ships once it is: a new template counts.
+        git(repo, "checkout", "-q", "--", ".")
+        write(repo, "templates/new.yaml", "x: 1\n")
+        code, out = run("plugin_check.py", against, repo)
+        expect("plugin_check --against: an untracked file in a shipped directory", code, 1, out)
+
+        # What only this repository reads does not ask for a release.
+        os.remove(os.path.join(repo, "templates", "new.yaml"))
+        write(repo, "README.md", "y\n")
+        write(repo, ".github/workflows/check.yaml", "on: push\n")
+        code, out = run("plugin_check.py", against, repo)
+        expect("plugin_check --against: README and CI only", code, 0, out)
+
+        # A ref that cannot be read is a failure, not a pass: the question was not answered.
+        code, out = run("plugin_check.py", ["--root", repo, "--against", "no-such-ref"], repo)
+        expect("plugin_check --against an unreadable ref", code, 1, out)
+
     if failures:
         sys.stderr.write("\n\n".join(failures) + "\n")
         return 1
     print("script_selftest: every case passed - absent subjects refused, uncounted scenarios "
-          "reported, and neither guard fires on the shape it allows")
+          "reported, a shipped change without a version bump refused, and no guard fires on the "
+          "shape it allows")
     return 0
 
 

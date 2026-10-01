@@ -20,12 +20,50 @@ running: `validate --strict` for the shape, this one for the agreement.
 A repository with no `.claude-plugin/` directory is a normal case, not a failure: the format and
 the checks do not need packaging. That is said out loud rather than passed over in silence, because
 "not checked" and "nothing wrong" are different statements.
+
+    python3 scripts/plugin_check.py --against origin/main   # CI on a pull request
+
+UNDER `--against`, A CHANGE THAT SHIPS HAS TO RAISE THE VERSION. `claude plugin update` compares the
+`version` in plugin.json and nothing else, so a fix merged without a bump is a fix that reaches no
+installed copy - and nothing says so. That was the state of this repository for six weeks: tag
+v0.2.0 on 19.08, ten commits on main after it, `plugin.json` still at 0.2.0, and installed copies
+pinned to a commit that lacked the guard the tenth commit added. Every one of those ten pull
+requests was green.
+
+What ships is decided by exclusion, not by a list. The plugin installs the whole repository, and the
+set of shipped paths grows - action.yml did not exist when this check was written - while the set of
+paths only this repository reads (its CI, its own Makefile, its out-of-scope notes) is small and
+stable. A list of shipped paths would go silently out of date the day a new one appeared, which is
+the failure this check exists to catch; a list of repository-only paths that is out of date asks for
+one bump too many, loudly. `example/` ships: the skill tells the agent to read it.
+
+The comparison is between two trees - the ref and the working tree - so a shallow checkout is
+enough, and locally an uncommitted change counts. Two pull requests that both raise 0.3.0 to 0.3.1
+are each green against the base they were opened on; the second merges as 0.3.1 with both changes
+in it, which still reaches installs. The check is about the version moving, not about one bump per
+change.
 """
 import argparse
 import json
 import os
 import re
+import subprocess
 import sys
+
+# Paths the plugin carries but nothing installed reads: this repository's own CI and housekeeping,
+# and the pages a person reads on GitHub. Everything else is shipped - see the docstring for why the
+# list is of the exceptions. A directory ends with a slash.
+REPO_ONLY = (
+    ".github/",
+    ".out-of-scope/",
+    ".gitignore",
+    "renovate.json",
+    "Makefile",            # this repository's gate; the consumer's is templates/Makefile, which ships
+    "README.md",
+    "LICENSE",
+)
+
+VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
 
 try:
     import yaml
@@ -142,14 +180,86 @@ def check(root):
     return problems
 
 
+def git(root, *args):
+    return subprocess.run(["git", "-C", root] + list(args),
+                          capture_output=True, text=True, check=True).stdout
+
+
+def parse_version(text):
+    """`0.3.0` -> (0, 3, 0). A pre-release or build suffix is ignored, so `0.3.0-rc1` -> `0.3.0`
+    does not count as raising the version; nothing here publishes pre-releases."""
+    m = VERSION.match(str(text or "").strip())
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def shipped(path):
+    return not any(path == p or (p.endswith("/") and path.startswith(p)) for p in REPO_ONLY)
+
+
+def check_version_against(root, ref):
+    """A change to what ships, compared with REF, has to come with a higher version than REF's."""
+    problems = []
+    try:
+        # `--no-renames`, so that a file moved out of a shipped directory is seen leaving it.
+        changed = git(root, "diff", "--name-only", "--no-renames", "--relative", ref, "--").splitlines()
+        changed += git(root, "ls-files", "--others", "--exclude-standard").splitlines()
+    except (subprocess.CalledProcessError, OSError) as e:
+        detail = getattr(e, "stderr", "") or str(e)
+        return ["could not compare with {0}: {1}".format(ref, detail.strip())]
+
+    ships = sorted(p for p in set(changed) if shipped(p))
+    if not ships:
+        print("nothing that ships differs from {0} - the version does not have to move".format(ref))
+        return problems
+
+    try:
+        theirs = json.loads(git(root, "show", "{0}:./.claude-plugin/plugin.json".format(ref)))
+    except subprocess.CalledProcessError:
+        print("no .claude-plugin/plugin.json on {0} - no version to raise".format(ref))
+        return problems
+    except ValueError as e:
+        return ["plugin.json on {0} does not parse: {1}".format(ref, e)]
+
+    try:
+        with open(os.path.join(root, ".claude-plugin", "plugin.json"), encoding="utf-8") as fh:
+            ours = json.load(fh)
+    except (OSError, ValueError) as e:
+        return ["cannot read plugin.json here: {0}".format(e)]
+
+    old, new = theirs.get("version"), ours.get("version")
+    if parse_version(new) is None:
+        return ["plugin.json version {0!r} is not MAJOR.MINOR.PATCH".format(new)]
+    if parse_version(old) is not None and parse_version(new) <= parse_version(old):
+        shown = ships[:8] + (["... {0} more".format(len(ships) - 8)] if len(ships) > 8 else [])
+        problems.append(
+            "{0} shipped file{1} changed against {2}, and plugin.json still says {3} ({2}: {4}). "
+            "`claude plugin update` compares that number and nothing else, so without a higher one "
+            "this change reaches no installed copy. Changed: {5}"
+            .format(len(ships), "" if len(ships) == 1 else "s", ref, new, old, ", ".join(shown)))
+    else:
+        print("version {0} -> {1}: {2} shipped file{3} changed against {4}"
+              .format(old, new, len(ships), "" if len(ships) == 1 else "s", ref))
+    return problems
+
+
 def main():
     ap = argparse.ArgumentParser(description="Packaging manifests against the skill they ship")
     ap.add_argument("--root", metavar="PATH", default=".",
                     help="the repository root (default: the working directory)")
+    ap.add_argument("--against", metavar="REF",
+                    help="also require a higher version than REF's when anything that ships "
+                         "differs from REF (CI on a pull request: the base branch)")
     args = ap.parse_args()
 
     _utf8_stdout()
-    problems = check(os.path.abspath(args.root))
+    root = os.path.abspath(args.root)
+    problems = check(root)
+    if args.against:
+        if problems is None:
+            # No packaging here: there is no version to raise, and that is said rather than passed.
+            print("no plugin.json - nothing to compare with {0}".format(args.against))
+        else:
+            problems += check_version_against(root, args.against)
     if problems is None:
         return 0
     if problems:

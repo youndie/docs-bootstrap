@@ -33,6 +33,13 @@ jobs:
           git fetch --no-tags origin "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
           python3 scripts/backlog_index.py --against "origin/$GITHUB_BASE_REF" --docs example/docs
 
+      # A pull request that changes what the plugin ships has to raise the version in plugin.json
+      # above the base branch's: `claude plugin update` compares that number and nothing else, and
+      # main once ran ten commits ahead of a 0.2.0 that every installed copy still believed. The
+      # same base ref as above, fetched once.
+      - if: github.event_name == 'pull_request'
+        run: python3 scripts/plugin_check.py --against "origin/$GITHUB_BASE_REF"
+
       # `status: draft` on the default branch means intent was documented as fact. It is legal in a
       # pull request and a defect once merged, so this runs on push to main only.
       - if: github.ref == 'refs/heads/main' && github.event_name == 'push'
