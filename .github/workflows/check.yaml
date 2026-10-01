@@ -18,22 +18,78 @@ jobs:
 
       - run: pip install pyyaml
 
-      # Exactly the target a contributor runs locally. See the Makefile for why this matters.
-      - run: make check
-
-      # The one check that cannot run locally: an item number that was free when this branch was cut
-      # and has since been taken by another branch that merged first. Each pull request is green on
-      # its own; the duplicate appears after the second merge, when the number is already quoted
-      # elsewhere. Pull requests only - on a push there is nothing to compare against.
+      # The checks that need the branch this one merges into, and so cannot be part of `make check`:
+      # a backlog number taken on the base since this branch was cut, and a change to anything the
+      # plugin ships that did not raise the version in plugin.json (`claude plugin update` compares
+      # that number and nothing else). Before the gate, because they say which branch took a number
+      # and which files needed a release, and a failing step stops the job.
+      #
+      # An explicit refspec, because a bare `git fetch origin <branch>` only moves FETCH_HEAD: it
+      # would leave origin/<branch> missing on the shallow clone checkout makes by default. Both
+      # checks compare trees, not histories, so the shallow clone is enough.
       - if: github.event_name == 'pull_request'
         run: |
-          # An explicit refspec, because a bare `git fetch origin <branch>` only moves FETCH_HEAD:
-          # it would leave origin/<branch> missing on the shallow clone checkout makes by default.
-          # The check reads a tree, not a history, so the shallow clone is enough.
           git fetch --no-tags origin "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
-          python3 scripts/backlog_index.py --against "origin/$GITHUB_BASE_REF" --docs example/docs
+          make against BASE="origin/$GITHUB_BASE_REF"
+
+      # Exactly the target a contributor runs locally. See the Makefile for why this matters.
+      - run: make check
 
       # `status: draft` on the default branch means intent was documented as fact. It is legal in a
       # pull request and a defect once merged, so this runs on push to main only.
       - if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        run: python3 scripts/docs_check.py --on-main --docs example/docs --backlog example/backlog.md
+        run: make on-main
+
+  # The action, run the way a project runs it: `uses:` with the project's Makefile in the working
+  # directory. Here the project is `example/` and its Makefile is templates/Makefile copied in at this
+  # step, so what is tested is the template as shipped rather than a copy that could drift from it.
+  # `uses: ./` is the action at this commit - a change to action.yml or check.mk is exercised by the
+  # pull request that makes it, not by the first project to take the next tag.
+  action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: cp templates/Makefile example/Makefile
+
+      # REPOS=. because the example's three "repositories" are its own subdirectories.
+      - uses: ./
+        with:
+          working-directory: example
+          target: check REPOS=.
+
+  # The other side of the job above: the action has to refuse, on a real runner, the two cases it
+  # exists to refuse. Without this the only evidence the action can fail is that nobody has seen it
+  # fail. Each case runs with continue-on-error and the last step asserts the outcome, so the job is
+  # green when both were refused - the annotations the refusals leave are expected.
+  action-refuses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # No subject: the template Makefile in a directory with no docs/ tree.
+      - run: mkdir -p no-docs && cp templates/Makefile no-docs/Makefile
+      - id: no-docs
+        continue-on-error: true
+        uses: ./
+        with:
+          working-directory: no-docs
+
+      # A project before migrating: a full tree, and a Makefile that runs copies of its own. The
+      # workflow would name a version the Makefile does not run.
+      - run: |
+          mkdir -p copied && cp -r example/docs example/backlog.md copied/
+          printf 'check:\n\t@echo checked by copies of my own\n' > copied/Makefile
+      - id: copied
+        continue-on-error: true
+        uses: ./
+        with:
+          working-directory: copied
+
+      - env:
+          NO_DOCS: ${{ steps.no-docs.outcome }}
+          COPIED: ${{ steps.copied.outcome }}
+        run: |
+          echo "no docs/ tree: $NO_DOCS, a Makefile of copies: $COPIED"
+          test "$NO_DOCS" = failure || { echo "::error::the action passed on a directory with no docs/ tree"; exit 1; }
+          test "$COPIED" = failure || { echo "::error::the action passed over a Makefile that does not run its checks"; exit 1; }

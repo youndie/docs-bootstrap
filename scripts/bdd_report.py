@@ -38,6 +38,10 @@ import sys
 # than one imprecise tool.
 FOLDERS = ("research", "features", "screens", "api", "services")
 
+# A scenario is its `### Scenario:` heading (SPEC 3.1). Scenarios written any other way - several in
+# one gherkin block, a heading in another language - are counted as nothing here, and this report
+# cannot tell that 0 from a document that has none. docs_check.py can, and warns
+# (`uncounted-scenarios`); it runs in the gate, which is where a warning is read.
 SCENARIO = re.compile(r"^###\s+Scenario:\s*(.+?)\s*$", re.M)
 # `**Automated:** <repository> <test>`, or `**Automated:** <test>` when the documentation covers a
 # single repository. Backticks may wrap either part or neither. Two shapes of test reference are

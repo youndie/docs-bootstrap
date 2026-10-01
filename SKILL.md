@@ -113,8 +113,15 @@ docs/README.md      from templates/docs-readme.md
 docs/research/  docs/features/  docs/screens/  docs/api/  docs/services/  docs/backlog/
 docs/templates/     copy the templates in, so the format travels with the repository
 backlog.md          the index page, with the BEGIN INDEX / END INDEX markers
-scripts/            copy the checkers in as well — a check that lives elsewhere does not run
+Makefile            from templates/Makefile — the gate (step 9)
+.github/workflows/check.yaml    from templates/workflow-check.yaml — CI, and the version of the checks (step 8)
 ```
+
+**Do not copy `scripts/` in.** This step used to say so, on the grounds that a check living elsewhere
+does not run. A check living elsewhere at a pinned version does; a copied one runs at the version of
+the day it was copied and never hears of a fix — 18 copies of one script were found across one
+portfolio in three versions, eleven of them without a guard that had been fixed upstream for weeks.
+The checks arrive at the ref the workflow pins, in CI and in a local `make check` alike.
 
 Omit the layers the project does not have. A single-service tool has no `screens/`; a library has
 no `api/`. Do not rename them — the tooling looks for these names.
@@ -179,6 +186,11 @@ repositories are in play, or just the test when one is, in whatever form that pr
 (`tests/test_store.py::test_name` is fine). The absence of that line means the check is manual, and
 that asymmetry is worth seeing.
 
+Give every scenario its own `### Scenario: <name>` heading, in English even in a document written
+in another language: the heading is what the tools count. The steps under it may be the template's
+bullets or a fenced `gherkin` block. Several scenarios in one block are counted as none, and the
+report then says 0 about a document full of them ([SPEC.md §3.1](SPEC.md)).
+
 ### 6. Quirks sections are the highest-value content
 
 An empty logout handler, a hard-coded test domain, a fire-and-forget sync, state kept in memory
@@ -213,22 +225,31 @@ Without this step the documents exist and nobody opens them.
    single highest-leverage line in the whole exercise.
 2. **The product README** links to `docs/` in one line.
 3. **CI** — copy [templates/workflow-check.yaml](templates/workflow-check.yaml) to
-   `.github/workflows/check.yaml`. Do not write one from memory: four of the decisions in it are
-   not the obvious ones, and each was paid for.
+   `.github/workflows/check.yaml`, unchanged, together with the Makefile of step 9. Do not write one
+   from memory: several of the decisions in it are not the obvious ones, and each was paid for.
 
-   * It runs `make check` — the same target a contributor runs. A local set that differs from the
-     CI set turns "green here, red there" into the normal state of affairs, and then neither is
-     read.
+   * **The version of the checks is written once**, in its `uses: youndie/docs-bootstrap@<tag>`
+     lines. CI runs the checks at that ref; the Makefile reads the same line and fetches the same
+     ref for a local run. A version pinned in the workflow and again anywhere else is two pins, and
+     two pins drift. Renovate's github-actions manager bumps the line, so a fix to the checks
+     arrives as a pull request instead of never.
+   * The action runs `make check` — the same target a contributor runs. A local set that differs
+     from the CI set turns "green here, red there" into the normal state of affairs, and then
+     neither is read. Checks of the project's own therefore go into the Makefile, not into the
+     workflow. Before anything runs, the action asks the Makefile where its checks come from, so a
+     pinned `uses:` over a Makefile that still runs copies fails instead of passing under a version
+     it does not run.
    * **No path filters.** They save seconds and buy red default branches: a generated file diverges
      from its sources when something outside the listed paths moves, and a new directory is a list
      nobody remembers to update.
-   * **Two checks are branch-specific.** `status: draft` is an error only on the default branch,
-     because in a pull request it is the normal state. The other compares backlog item numbers with
-     the base branch, and how much it buys depends on a decision made elsewhere: if every branch
-     commits the regenerated index, two branches adding items always conflict in that one file, and
-     the conflict — not this check — is what stops them. It earns its keep when the index is
-     rebuilt on the default branch instead. Either way it runs **before** `make check`, because
-     both catch the collision and only one of them says which branch took the number.
+   * **Two checks are branch-specific**, and the action runs them around `make check`.
+     `status: draft` is an error only on the default branch, because in a pull request it is the
+     normal state. The other compares backlog item numbers with the base branch, and how much it
+     buys depends on a decision made elsewhere: if every branch commits the regenerated index, two
+     branches adding items always conflict in that one file, and the conflict — not this check — is
+     what stops them. It earns its keep when the index is rebuilt on the default branch instead.
+     Either way it runs **before** `make check`, because both catch the collision and only one of
+     them says which branch took the number.
    * **A pull request that cannot be merged runs no `pull_request` workflows at all.** Nothing is
      reported and nothing is red; the checks are simply absent, exactly when the branches have
      diverged most. Anything gated on that event is a backstop rather than a guarantee.
@@ -238,25 +259,57 @@ Without this step the documents exist and nobody opens them.
 
 ### 9. Run the checks and fix what they find
 
+Copy [templates/Makefile](templates/Makefile) to the root of the repository — **not** this
+repository's own `Makefile`, which checks docs-bootstrap itself: copied into a project it prints
+"no docs tree — nothing checked" and goes green having checked nothing. Set the three lines that
+are the project's: `DOCS` and `BACKLOG` if the tree is not at `docs/` and `backlog.md`, and
+`BACKLOG_FORM` — `files`, `milestones` or `none`, the answer of step 7.
+
 ```bash
 pip install pyyaml
-python3 scripts/backlog_index.py --check      # the gate: blocking, and CI runs exactly this set
-python3 scripts/docs_check.py
-python3 scripts/coverage_map.py --check
-python3 scripts/bdd_report.py                 # reports: read by a person, not by a gate
-python3 scripts/code_anchors.py --repos ..
+make check      # the gate and the reports: exactly what CI runs
+make fix        # regenerate the backlog index, append missing coverage-map lines
 ```
 
-Every script defaults to `docs` in the working directory, so in a normal project they take no
-arguments. Copying this repository's [Makefile](Makefile) in gives you `make check` / `make report`
-/ `make fix` and, more to the point, one named target that CI and a contributor both run — a local
-set that differs from the CI set turns "green here, red there" into the normal state of affairs.
+The first run fetches the checks at the ref the workflow pins into `.docs-bootstrap/`, which ignores
+itself; `make check` then runs the same scripts CI runs. The gate opens with a guard that fails when
+its subject is not there — no `docs/`, or `BACKLOG_FORM=files` and no `docs/backlog/B-*.md` —
+because every script treats a missing tree as nothing to check, and a gate that cannot find its
+subject must not report success. The line it prints names the version of the checks that ran.
+
+Checks of the project's own go under `gate:` in the Makefile, where CI runs them too.
+`DOCS_BOOTSTRAP=<dir> make check` runs the checks from a directory instead — a clone of
+docs-bootstrap being changed, or, offline or without GitHub Actions, a committed copy of its
+`check.mk`, `scripts/` and `.claude-plugin/`. That is the copy route again, with its drift: the
+fallback, not the default.
 
 The two reports are non-blocking on purpose. Demanding a percentage of automated scenarios is
 meaningless while acceptance is manual, and an anchor goes stale because of a refactor in somebody
 else's repository, not because of an edit here — a machine cannot tell a live path from one quoted
 as obsolete. `make fix` regenerates the index and appends the coverage-map lines you forgot; the
 descriptions it writes are placeholders, and finishing them is yours.
+
+## When the repository already carries copies of the checks
+
+Repositories documented before 0.3.0 copied `scripts/` and a Makefile in. Moving one to the pinned
+checks, in one pull request:
+
+* **`scripts/backlog_index.py`, `docs_check.py`, `coverage_map.py`, `bdd_report.py`,
+  `code_anchors.py`** → delete them. A script of the project's own stays, and its line moves under
+  `gate:` in the new Makefile.
+* **The Makefile** → [templates/Makefile](templates/Makefile). Carry over `DOCS`, `BACKLOG`,
+  `REPOS` and the project's own gate lines; set `BACKLOG_FORM`. A hand-written guard (`test -d docs`, a count of
+  `docs/backlog/B-*.md`) goes — `docs-guard` in check.mk does that now.
+* **`.github/workflows/check.yaml`** → the steps `setup-python`, `pip install pyyaml`, the
+  `backlog_index.py --against` step, `make check` and the `docs_check.py --on-main` step become one
+  `uses: youndie/docs-bootstrap@<tag>`, the tag in
+  [templates/workflow-check.yaml](templates/workflow-check.yaml); the anchors job's steps become the
+  same line with `target: report`. Steps that are not the documentation gate — a formatter, a build —
+  stay as they are.
+* **Renovate** needs nothing when the repository extends a preset with the github-actions manager
+  on, which is the default.
+
+Then `make check` locally and the check job in CI print the same `docs-bootstrap <version>` line.
 
 ## When the documentation already exists
 

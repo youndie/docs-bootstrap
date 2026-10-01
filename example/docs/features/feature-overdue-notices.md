@@ -72,9 +72,13 @@ daily (external scheduler) ──▶ jobs/overdue_notices.run(today)
 * **Then:** the loan is skipped (`last_notice_day >= step`) and the run reports 0 notices for it.
 
 ### Scenario: A missed week does not produce a backlog of mail
-* **Given:** a loan 9 days overdue that never received the day-1 notice.
-* **When:** the job runs.
-* **Then:** exactly one message goes out — the day-7 one — and `last_notice_day` becomes `7`.
+
+```gherkin
+Given a loan 9 days overdue that never received the day-1 notice
+When the job runs
+Then exactly one message goes out, the day-7 one
+And last_notice_day becomes 7
+```
 
 ### Scenario: SMTP is down
 * **Given:** the mail server refuses the connection.

@@ -1,0 +1,115 @@
+name: docs-bootstrap check
+description: >
+  The docs-bootstrap documentation checks at the version this `uses:` line pins - run as the same
+  `make check` a contributor runs, plus the two checks that depend on the event.
+author: Pavel Votyakov
+
+# WHY AN ACTION, AND WHY IT RUNS THE PROJECT'S OWN MAKEFILE.
+#
+# The checks used to be copied into each project, and copies drift: 18 copies of backlog_index.py
+# were found in three versions, eleven without a guard that had existed upstream for weeks. A ref in
+# a `uses:` line is a version Renovate can bump, so a fix arrives as a pull request instead of never.
+#
+# But a pin that only CI honours splits the gate in two: CI at the pinned ref, a laptop at whatever
+# copy it has. So this action does not run the checks itself. It runs `make check` in the project -
+# the target a contributor runs - with DOCS_BOOTSTRAP pointing at this checkout; the project's
+# Makefile (templates/Makefile) includes check.mk from there. Locally the same Makefile reads the ref
+# out of this very `uses:` line and fetches it. One ref, written once, and both sides run it.
+#
+# Usage: templates/workflow-check.yaml, which names the current tag - a step after
+# actions/checkout, `uses: youndie/docs-bootstrap@<tag>`, and nothing else.
+
+inputs:
+  target:
+    description: >
+      What to run: make target(s), optionally with VAR=value overrides, split on whitespace.
+      `check` is the gate and the reports; the scheduled anchors job passes `report`.
+    required: false
+    default: check
+  working-directory:
+    description: The directory holding the project's Makefile.
+    required: false
+    default: .
+  python-version:
+    description: The Python the checks run on. They need 3.8 or later and PyYAML.
+    required: false
+    default: "3.11"
+  branch-checks:
+    description: >
+      Run the two checks that depend on the event: backlog item numbers against the base branch on
+      a pull request, and `status: draft` as an error on a push to the default branch.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    # Not the runner's own Python: on ubuntu-24.04 a bare `pip install` is refused as an externally
+    # managed environment, and the version would move whenever the image does.
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install PyYAML
+      shell: bash
+      run: python3 -m pip install --disable-pip-version-check --quiet pyyaml
+
+    # A workflow that pins this action over a Makefile that still runs copied scripts would show a
+    # version in its `uses:` line and run another one - the drift this action exists to end, now
+    # hidden behind a line that looks pinned. So the Makefile is asked where its checks come from
+    # before anything runs. A Makefile without the target is an old copy, not this template.
+    - name: The Makefile runs this version of the checks
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        want=$(cd "$GITHUB_ACTION_PATH" && pwd -P)
+        if ! got=$(make -s --no-print-directory docs-bootstrap-path DOCS_BOOTSTRAP="$GITHUB_ACTION_PATH"); then
+          echo "::error::the Makefile in $PWD does not include docs-bootstrap's check.mk, so it would run checks other than the ones this action pins. Replace it with templates/Makefile from $GITHUB_ACTION_PATH (keep your own gate lines)."
+          exit 1
+        fi
+        if [ "$got" != "$want" ]; then
+          echo "::error::the Makefile in $PWD takes its checks from $got, not from this action ($want). Remove the override of DOCS_BOOTSTRAP."
+          exit 1
+        fi
+        echo "checks from $want"
+
+    # BEFORE the gate, and that order is the whole value of this step. Both catch a backlog number
+    # taken twice, but this one says which branch took it and under what name, while the gate says
+    # `duplicate ids: B-06`. A failing step stops the job, so whichever runs first is the message
+    # the author gets.
+    #
+    # A backstop rather than a guarantee when every branch commits the regenerated index: two
+    # branches that each add an item then conflict in that one file, and a pull request that cannot
+    # be merged gets no `pull_request` run at all - this step is absent precisely when the branches
+    # have diverged most. Once the conflict is resolved the gate catches the collision anyway. It
+    # earns its keep when the index is rebuilt on the default branch instead.
+    #
+    # The refspec is explicit: `git fetch origin main` only moves FETCH_HEAD and creates no
+    # remote-tracking ref. The check reads a tree, not a history, so the shallow clone is enough.
+    - name: Backlog numbers against the base branch
+      if: github.event_name == 'pull_request' && inputs.branch-checks == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        BASE_REF: ${{ github.base_ref }}
+      run: |
+        git fetch --no-tags origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+        make docs-against BASE="origin/$BASE_REF" DOCS_BOOTSTRAP="$GITHUB_ACTION_PATH"
+
+    - name: make ${{ inputs.target }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        TARGET: ${{ inputs.target }}
+      # Split on purpose: `report REPOS=repos` is a target and an override.
+      run: make $TARGET DOCS_BOOTSTRAP="$GITHUB_ACTION_PATH"
+
+    # The default branch only. `status: draft` is legal in a pull request, where it means "this
+    # branch will make it true", and a defect the moment it merges.
+    - name: No draft on the default branch
+      if: >-
+        inputs.branch-checks == 'true' && github.event_name == 'push' &&
+        github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: make docs-on-main DOCS_BOOTSTRAP="$GITHUB_ACTION_PATH"

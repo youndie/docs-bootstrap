@@ -10,6 +10,11 @@ parent_feature: feature-<...>
 calls_api:
   - <endpoint-id>
 source: <repo>/<path to the feature directory in code>
+# design:                        # optional, SPEC §3.2.1: the screen was built to a design
+#   canvas: <url>
+#   references: <repo>/<dir>     # one PNG per state, named like the screenshot fixture
+#   states:                      # section-1 state -> reference stem
+#     Empty: <Screen>_Empty
 ---
 
 # Screen: <name>
@@ -34,6 +39,8 @@ source: <repo>/<path to the feature directory in code>
 ## 1. Screen states
 
 List these from the actual state class, using the field names that are in the code.
+When the frontmatter carries `design:`, every key of its `states` has to be one of the names
+below; the checker reads them off the bold text of each line.
 
 - [ ] **Loading:** [skeleton, spinner on the button]
 - [ ] **Empty:** [the empty state and its call to action]

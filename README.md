@@ -26,8 +26,9 @@ not.
 |---|---|
 | [SKILL.md](SKILL.md) | the skill: how an agent bootstraps or extends this documentation for a repository |
 | [SPEC.md](SPEC.md) | the format contract — layers, frontmatter, anchors, `spec_version: 1` |
-| [templates/](templates/) | one template per document type, plus two CI workflows to copy |
+| [templates/](templates/) | one template per document type, two CI workflows and the Makefile a project copies |
 | [scripts/](scripts/) | the checks: link graph, coverage map, backlog index, code anchors, BDD count |
+| [action.yml](action.yml), [check.mk](check.mk) | the checks as a GitHub Action and a make include, run at the version a project pins |
 | [example/](example/) | a complete worked instance — a small library lending system, code and docs |
 | [WORKFLOW.md](WORKFLOW.md) | the docs-first process the format grew out of; optional |
 | [.out-of-scope/](.out-of-scope/) | what this repository was asked for and declined, with the reasons |
@@ -59,6 +60,14 @@ introduces itself to the ones that are not Claude Code — and the half that is 
 format contract, the templates and the checks) is plain files and six Python scripts that answer to
 `make check`. A team writing these documents by hand gets the same gate.
 
+**The checks in a documented repository** come from here too, at a pinned version, rather than as
+copies. Two files are copied once — [templates/workflow-check.yaml](templates/workflow-check.yaml)
+and [templates/Makefile](templates/Makefile) — and the version lives in one place: the
+`uses: youndie/docs-bootstrap@<tag>` line of the workflow. CI runs the checks at that tag; the
+Makefile reads the same line and fetches the same tag for a local `make check`; Renovate bumps it.
+Copied scripts used to be the route, and that is how 18 copies of one script came to exist in three
+versions. [SKILL.md](SKILL.md), steps 8 and 9, has the details and the offline fallback.
+
 ## The two rules
 
 > **`main` describes what exists. An open pull request describes what will be.**
@@ -81,7 +90,8 @@ checked.
 three features, two screens, two endpoint references, six backlog items — and a real, if tiny, code
 tree underneath, so that every anchor in every document resolves to a file that exists.
 
-That is not decoration. It means this repository's own CI runs the checks against its own example:
+That is not decoration. It means this repository's own CI runs the checks against its own example,
+through the same Makefile template and the same action a documented repository uses:
 
 ```bash
 pip install pyyaml
@@ -95,11 +105,11 @@ faith.
 
 | Script | Guards | In CI |
 |---|---|---|
-| `docs_check.py` | link graph across the layers, `id` = filename, required fields, `status` vocabulary, at least one path into the code, a screen's `design.states` naming states the document lists | blocking |
+| `docs_check.py` | link graph across the layers, `id` = filename, required fields, `status` vocabulary, at least one path into the code, a screen's `design.states` naming states the document lists; **warns** about scenarios no tool can count — a gherkin block with no `### Scenario:` heading of its own is reported as 0 everywhere else | blocking |
 | `coverage_map.py` | the map in `docs/README.md` matches the files on disk | blocking |
 | `backlog_index.py` | the generated index matches the items; no duplicate numbers or slugs; `blocked_by` resolves; **under `--check`, that the items are there at all** — a backlog lost to a merge used to exit 0 (`--allow-missing` for a project without its first item yet) | blocking |
-| `plugin_check.py` | the skill's name in `SKILL.md`, `plugin.json` and `marketplace.json` is one name, and every declared skill directory holds a `SKILL.md` | blocking |
-| `script_selftest.py` | what the scripts above do when the tree is **absent** — the case `make check` cannot reach, since it runs them against the example | blocking |
+| `plugin_check.py` | the skill's name in `SKILL.md`, `plugin.json` and `marketplace.json` is one name, and every declared skill directory holds a `SKILL.md`; the tag `templates/workflow-check.yaml` pins is that version; **on a pull request, that a change to anything the plugin ships raises `version` above the base branch's** — otherwise `claude plugin update` never sees it | blocking |
+| `script_selftest.py` | what the scripts above do on the cases `make check` cannot reach, since it runs them against the example: a tree that is **absent**, and defects the example does not carry — each guard held from both sides, a fixture that must trip it and one that must not | blocking |
 | `bdd_report.py` | counts scenarios and how many are automated | report |
 | `code_anchors.py` | whether the paths still exist, the design reference PNGs of a screen included | report, scheduled |
 
