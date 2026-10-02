@@ -12,6 +12,10 @@ with the code, because the refactor happens elsewhere and knows nothing about th
 This is the one class of defect that cannot be caught inside the documentation tree - it needs
 access to the code.
 
+A PATH MAY CITE A LINE OR A RANGE, `src/routes/loans.py:40-52`. The file is resolved as any other,
+and the anchor is reported missing when the file is now shorter than the range; what the lines say
+is not checked, because it moves with every edit above it.
+
 HOW PATHS ARE MATCHED. They are written down in different ways, and that is fine:
 
     catalog-api/src/routes/loans.py            from the repository root
@@ -72,8 +76,11 @@ import sys
 
 FOLDERS = ("research", "features", "screens", "api", "services")
 
-# A path in backticks: at least one slash.
-PATH_RE = re.compile(r"`(\.{3}/)?([A-Za-z0-9_.-][A-Za-z0-9_./{}<>*-]*/[A-Za-z0-9_./{}<>*-]*)`")
+# A path in backticks: at least one slash, and optionally a line or a range after it -
+# `.../Producer.kt:228-239`. Without the suffix in the pattern such an anchor was not collected at
+# all: neither found nor missing, so a file moved or deleted under it passed in silence.
+PATH_RE = re.compile(r"`(\.{3}/)?([A-Za-z0-9_.-][A-Za-z0-9_./{}<>*-]*/[A-Za-z0-9_./{}<>*-]*)"
+                     r"(?::(\d+)(?:-(\d+))?)?`")
 # A row of the code-anchor table: | service | paths |
 TABLE_ROW = re.compile(r"^\|\s*([^|]+?)\s*\|\s*(.+?)\s*\|\s*$", re.M)
 # Fragments there is nothing to check against: patterns and substitutions.
@@ -239,6 +246,7 @@ def load_trees(repos_root, skip=()):
             continue
         tree = _git_tree(path) or _walked_tree(path)
         if tree["files"]:
+            tree["root"] = path
             trees[name] = tree
     return trees
 
@@ -301,13 +309,14 @@ def collect_anchors(root, deprecated=None):
             in_table = {}
             for cells in TABLE_ROW.findall(text):
                 service = cells[0].strip().strip("*` ")
-                for _, p in PATH_RE.findall(cells[1]):
+                for _, p, _, _ in PATH_RE.findall(cells[1]):
                     in_table[p] = service
-            for dots, p in PATH_RE.findall(text):
-                anchors.append({
-                    "doc": doc, "path": p, "shortened": bool(dots),
-                    "service_hint": in_table.get(p, ""),
-                })
+            for dots, p, first, last in PATH_RE.findall(text):
+                anchor = {"doc": doc, "path": p, "shortened": bool(dots),
+                          "service_hint": in_table.get(p, "")}
+                if first:
+                    anchor["lines"] = [int(first), int(last or first)]
+                anchors.append(anchor)
             # Addresses inside an artefact or a repository nobody clones here. Collected separately
             # because `!` is not in PATH_RE's character class: without this they were not reported as
             # anything at all, which is worse than reporting them wrongly - an address the checker
@@ -322,6 +331,31 @@ def collect_anchors(root, deprecated=None):
                     anchors.append({"doc": doc, "path": p, "shortened": False,
                                     "service_hint": "", "design": True})
     return anchors
+
+
+def _line_count(path):
+    """How many lines a file has, or None if it cannot be read."""
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return None
+    return data.count(b"\n") + (0 if not data or data.endswith(b"\n") else 1)
+
+
+def _within(anchor, found, trees):
+    """A found file whose cited lines are past its end has rotted as surely as a renamed one: the
+    code the anchor pointed at is no longer where it says. The range is checked against the length
+    only - the content moves with every edit above it, and no check can say what it was."""
+    lines = anchor.get("lines")
+    if not lines or found["at"] not in trees[found["repo"]]["files"]:
+        return found
+    count = _line_count(os.path.join(trees[found["repo"]]["root"], found["at"]))
+    if count is None or lines[1] <= count:
+        return found
+    return {"status": "missing",
+            "why": "lines {0}-{1} cited, and {2}/{3} has {4}".format(
+                lines[0], lines[1], found["repo"], found["at"], count)}
 
 
 def resolve(anchor, trees, svc2repo):
@@ -370,13 +404,15 @@ def resolve(anchor, trees, svc2repo):
         # off the front.
         for candidate in (p, p.split("/", 1)[1] if "/" in p else p):
             if candidate in tree["files"] or candidate in tree["dirs"]:
-                return {"status": "found", "repo": repo, "at": candidate, "exact": True}
+                return _within(anchor, {"status": "found", "repo": repo, "at": candidate,
+                                        "exact": True}, trees)
         # A suffix match: the anchor was written from the module root, or abbreviated.
         suffix = "/" + p
         hit = next((f for f in tree["files"] if f.endswith(suffix)), None) \
             or next((d for d in tree["dirs"] if d.endswith(suffix)), None)
         if hit:
-            return {"status": "found", "repo": repo, "at": hit, "exact": False}
+            return _within(anchor, {"status": "found", "repo": repo, "at": hit, "exact": False},
+                           trees)
 
     # Not found. A file of that name may simply have moved - a refactor that shuffles modules
     # around is the usual cause. Saying where a file with the same name lives now turns the report
@@ -463,7 +499,8 @@ def main():
             print("  {0}".format(doc))
             for a in by_doc[doc]:
                 mark = " (abbreviated)" if a["shortened"] else ""
-                print("      {0}{1}".format(a["path"], mark))
+                at = ":{0}-{1}".format(*a["lines"]) if a.get("lines") else ""
+                print("      {0}{1}{2}".format(a["path"], at, mark))
                 if a.get("why"):
                     print("          {0}".format(a["why"]))
                 for at in a.get("moved_to", []):

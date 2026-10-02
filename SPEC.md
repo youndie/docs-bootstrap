@@ -378,6 +378,12 @@ src/routes/loans.py                      from the module root
 .../routes/loans.py                      abbreviated
 ```
 
+A path may end in a line or a range, `catalog-api/src/routes/loans.py:40-52`, where the place in the
+file is the point. The checker resolves the file the same way and reports the anchor missing when
+the file is now shorter than the range; it does not check what the lines say, which moves with every
+edit above them — so a file or a directory remains the better anchor wherever it will do. An address
+inside an artefact (§4.1) may end the same way.
+
 **Anchor matching is by suffix.** A path is alive if some file or directory in the tree ends with
 the fragment. This can report a false "found" — two files with the same name in different modules —
 but practically never a false "missing", and the job of the check is to catch rot.

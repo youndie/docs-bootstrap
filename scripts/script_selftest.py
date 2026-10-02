@@ -432,6 +432,39 @@ def main():
         expect_true("bdd_report walked a worktree and found a test in an ignored directory",
                     found == [False], out)
 
+    # A path may cite a line or a range (SPEC 4). It used to be collected as nothing - neither found
+    # nor missing - so the file under it could move or go and the report never said.
+    with tempfile.TemporaryDirectory() as tree:
+        write(tree, "app/src/live.py", "a = 1\nb = 2\nc = 3\nd = 4\ne = 5\n")
+        write(tree, "docs/features/feature-x.md", doc(
+            "active", "app/src/live.py:2-4",
+            "\nAlso `app/src/gone.py:3` and `app/src/live.py:40-52`.\n"))
+        code, report, out = anchors(tree, ".")
+        statuses = sorted((a["path"], a.get("lines"), a["status"])
+                          for a in (report or {}).get("anchors", []))
+        expect_true("code_anchors did not check anchors that cite lines: a range inside the file "
+                    "found, a missing file and a range past the file's end missing",
+                    statuses == [("app/src/gone.py", [3, 3], "missing"),
+                                 ("app/src/live.py", [2, 4], "found"),
+                                 ("app/src/live.py", [40, 52], "missing")], out)
+
+    # ... and docs_check counts it as the path into the code a document must carry. The control: the
+    # same document with no path at all is refused, so the case can fail.
+    def no_anchor_errors(tree):
+        code, out = run("docs_check.py", ["--json", "--docs", os.path.join(tree, "docs")], tree)
+        try:
+            return [e for e in json.loads(out)["errors"] if e["check"] == "no-code-anchor"], out
+        except (ValueError, KeyError):
+            return None, out
+
+    with tempfile.TemporaryDirectory() as tree:
+        write(tree, "docs/features/feature-x.md", doc("active", "app/src/live.py:2"))
+        errors, out = no_anchor_errors(tree)
+        expect_true("docs_check refused a document whose only anchor cites a line", errors == [], out)
+        write(tree, "docs/features/feature-x.md", doc("active", "no path here"))
+        errors, out = no_anchor_errors(tree)
+        expect_true("docs_check accepted a document with no anchor at all", bool(errors), out)
+
     # -- backlog numbers against the base: a rename is not a theft ------------------------------------
     item = "---\nid: B-01\ntitle: \"{0}\"\nstatus: open\n---\n\n{1}\n"
     with tempfile.TemporaryDirectory() as repo:
@@ -509,7 +542,8 @@ A scenario with an `**Automated:**` line names its test; this sentence is about 
     print("script_selftest: every case passed - absent subjects refused by the scripts and by the "
           "Makefile, the pin read once and never guessed, uncounted scenarios reported, a shipped "
           "change without a version bump and a template pinning another release refused, reports "
-          "that cannot block the gate, anchors not looked for where they should not be, a renamed "
+          "that cannot block the gate, anchors not looked for where they should not be and anchors "
+          "citing lines looked for, a renamed "
           "item told from a stolen number, `**Automated:**` lines read as lists and counted only in "
           "scenarios, and no guard fires on the shape it allows")
     return 0
