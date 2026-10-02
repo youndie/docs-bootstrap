@@ -378,6 +378,12 @@ src/routes/loans.py                      from the module root
 .../routes/loans.py                      abbreviated
 ```
 
+A leading `./` changes nothing: `./scripts/verify.sh` is `scripts/verify.sh`, from the root of the
+anchor's own repository. A path that climbs out with `../` is none of the three forms — relative to
+the document or to the root, nothing says which, and either way it has left the anchor's
+repository — and is reported missing, saying so. A path into another repository starts with that
+repository's name, or is an address (§4.1).
+
 A path may end in a line or a range, `catalog-api/src/routes/loans.py:40-52`, where the place in the
 file is the point. The checker resolves the file the same way and reports the anchor missing when
 the file is now shorter than the range; it does not check what the lines say, which moves with every
@@ -425,6 +431,17 @@ The checker reports these in their own section and never counts them as rot.
 way to silence any inconvenient anchor. A versioned file, a Maven-style coordinate, or `owner/repo`
 (optionally `@ref`) can be obtained by a reader who wants to check the claim; `Ktor!/…` cannot, and
 is reported as **missing**, saying why. The escape hatch is deliberately too narrow to hide in.
+
+**The ref names what was read: a commit or a version tag, not a branch.** A branch moves, so the file
+a reader fetches at it is not the one the claim was checked against, and a branch that lives only in
+somebody's local clone cannot be fetched at all. No ref is the default branch, and moves the same
+way. The checker reads the shape of the ref — 7 to 40 hex digits is a commit, `v1.31`, `4.3.1` or
+`7.6.0.RELEASE` is a version tag — and lists any other ref, and a missing one, in a section of its
+own: *at a ref that moves*, with the pinned form to write instead. That section is not rot and does
+not fail `--check`. Whether the ref exists is not asked: that would take the network, and a token for
+every private repository, on every run, and a branch would still pass it, because a branch exists.
+The shape is all the check can hold, and it has blind spots a reader should know: a branch named
+like a version (`7.2`) passes, and so does a sha that was never pushed.
 
 The rule this serves is the same one §4 opens with: an anchor exists so the reader reaches the thing
 in one hop. `ktor-server-core-3.5.2.klib!/…` is one hop. A bare path that no tree contains is none.

@@ -688,6 +688,76 @@ def main():
                     and status.get("src/thing.py") == "missing" and status.get("a/x.md") == "missing",
                     out)
 
+    # `./x` is `x`, written from the root of the anchor's own repository. Through 0.3.5 the `.` was
+    # taken for the name of a repository: none is called that, so a file that is plainly there was
+    # reported missing - beside the neighbours and under `--repos .` alike. A path that climbs out
+    # with `../` names no tree at all and is missing, saying why; bare dots in prose are no path.
+    with tempfile.TemporaryDirectory() as root:
+        repos = os.path.join(root, "repos")
+        write(repos, "own/src/live.py", "x = 1\n")
+        write(repos, "other/src/live.py", "x = 1\n")
+        write(repos, "own/docs/features/feature-x.md", doc(
+            "active", "./src/live.py",
+            "\n`./src/gone.py`, `../src/live.py`, `../other/src/live.py`, and the depth of `../`.\n"))
+        code, report, out = anchors(os.path.join(repos, "own"), repos)
+        status = dict((a["path"], a["status"]) for a in (report or {}).get("anchors", []))
+        why = dict((a["path"], a.get("why", "")) for a in (report or {}).get("anchors", []))
+        expect_true("code_anchors did not read `./x` as `x` in the anchor's own repository, or "
+                    "resolved a path that climbs out with `../` (wanted ./src/live.py found, "
+                    "./src/gone.py missing, both `../` paths missing saying so, bare `../` skipped)",
+                    status == {"./src/live.py": "found", "./src/gone.py": "missing",
+                               "../src/live.py": "missing", "../other/src/live.py": "missing",
+                               "../": "skipped"}
+                    and "`../`" in why.get("../src/live.py", "")
+                    and "`../`" in why.get("../other/src/live.py", ""), out)
+
+    with tempfile.TemporaryDirectory() as tree:
+        write(tree, "app/src/live.py", "x = 1\n")
+        write(tree, "docs/features/feature-x.md", doc("active", "./app/src/live.py"))
+        code, report, out = anchors(tree, ".")
+        expect_true("code_anchors --repos . reported `./app/src/live.py` as missing",
+                    report is not None and missing_paths(report) == [] and report["found"] == 1, out)
+
+    # -- addresses: the ref is what was read (SPEC 4.1) -----------------------------------------------
+    # `owner/repo@ref` passed on its shape alone, so `@<a branch that only lives in somebody's clone>`
+    # was as good as a commit. A ref has to look like a commit or a version tag; anything else, and no
+    # ref at all, is listed as moving - in a section of its own, not as rot, and not failing --check,
+    # because consumers carry such addresses today. The controls: the pinned forms stay where they
+    # were, and a left side nobody can fetch is still missing.
+    addresses = {
+        "o/r@0123abc!/src/a.kt": "external", "o/r@v1.31!/src/a.kt": "external",
+        "o/r@4.3.1!/src/a.kt": "external", "o/r@7.6.0.RELEASE!/src/a.kt": "external",
+        "o/r@worktree-local-only!/src/a.kt": "unpinned", "o/r@main!/src/a.kt": "unpinned",
+        "o/r@feat/memory-limit!/src/a.kt": "unpinned", "o/r!/src/a.kt": "unpinned",
+        "Ktor!/src/a.kt": "missing",
+    }
+    with tempfile.TemporaryDirectory() as tree:
+        write(tree, "app/src/live.py", "x = 1\n")
+        body = "\n" + "\n".join("* `{0}`".format(a) for a in addresses if a != "Ktor!/src/a.kt") + "\n"
+        write(tree, "docs/research/research-x.md", doc("active", "app/src/live.py", body))
+        code, report, out = anchors(tree, ".", "--check")
+        status = dict((a["path"], a["status"]) for a in (report or {}).get("anchors", [])
+                      if "!/" in a["path"])
+        wanted = dict((a, s) for a, s in addresses.items() if a != "Ktor!/src/a.kt")
+        expect_true("code_anchors did not tell an address at a commit or a version tag from one at a "
+                    "branch or at no ref", status == wanted, out)
+        expect("code_anchors --check with addresses at a moving ref and nothing missing", code, 0, out)
+        moving = [a for a in (report or {}).get("anchors", []) if a["status"] == "unpinned"]
+        expect_true("code_anchors did not say which ref moves and what to write instead",
+                    report is not None and report.get("unpinned") == 4
+                    and all("<sha>" in a.get("why", "") for a in moving)
+                    and any("worktree-local-only" in a.get("why", "") for a in moving), out)
+        code, out = run("code_anchors.py", ["--docs", os.path.join(tree, "docs"), "--repos", "."], tree)
+        expect_true("code_anchors did not list the addresses at a moving ref in a section of their own",
+                    code == 0 and "AT A REF THAT MOVES" in out
+                    and "o/r@main!/src/a.kt" in out.split("AT A REF THAT MOVES", 1)[-1], out)
+
+        write(tree, "docs/research/research-x.md",
+              doc("active", "app/src/live.py", body + "* `Ktor!/src/a.kt`\n"))
+        code, report, out = anchors(tree, ".", "--check")
+        expect_true("code_anchors --check passed an address whose left side nobody can fetch",
+                    code == 1 and missing_paths(report) == ["Ktor!/src/a.kt"], out)
+
     # -- backlog numbers against the base: a rename is not a theft ------------------------------------
     item = "---\nid: B-01\ntitle: \"{0}\"\nstatus: open\n---\n\n{1}\n"
     with tempfile.TemporaryDirectory() as repo:
@@ -767,9 +837,11 @@ A scenario with an `**Automated:**` line names its test; this sentence is about 
           "them and for no other, uncounted scenarios reported, a shipped "
           "change without a version bump and a template pinning another release refused, reports "
           "that cannot block the gate, anchors not looked for where they should not be, anchors "
-          "citing lines looked for and anchors found only in their own repository, a renamed "
-          "item told from a stolen number, `**Automated:**` lines read as lists and counted only in "
-          "scenarios, and no guard fires on the shape it allows")
+          "citing lines looked for and anchors found only in their own repository, `./` read as "
+          "the root and `../` as leaving it, addresses at a branch or at no ref told from pinned "
+          "ones without failing --check, a renamed item told from a stolen number, "
+          "`**Automated:**` lines read as lists and counted only in scenarios, and no guard fires "
+          "on the shape it allows")
     return 0
 
 
