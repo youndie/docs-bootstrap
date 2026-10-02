@@ -9,7 +9,10 @@
 # the consumer's: where the tree is, which backlog form it keeps, and checks of its own.
 #
 # The targets are prefixed `docs-` so that they cannot collide with a target of the project's own,
-# and the consumer's Makefile maps its `gate`, `report` and `fix` onto them.
+# and the consumer's Makefile maps its `gate`, `report` and `fix` onto them. The prefix is also how
+# that Makefile knows to load this file at all: it includes it only for a `docs-` goal or one of its
+# DOCS_BOOTSTRAP_GOALS, so that a target of the project's own needs neither the pin nor the network.
+# A target added here without the prefix would not load this file when a consumer asks for it.
 #
 # DOCS_BOOTSTRAP is the directory this file is in; the including Makefile sets it.
 
@@ -27,7 +30,10 @@ DOCS_BOOTSTRAP_VERSION := $(shell sed -n -E 's/^[[:space:]]*"version"[[:space:]]
 # one file that is still copied, so it is the one file that can fall behind without anybody being
 # told; it states its revision and this says when that is not the current one. A warning, not an
 # error: a version bump must not turn every consumer red over a file that still works.
-DOCS_BOOTSTRAP_SHIM_CURRENT := 1
+#
+#   1  0.3.0  reads the pin from the workflow, fetches it, includes this file
+#   2  0.3.5  includes this file only for a goal that runs the checks (DOCS_BOOTSTRAP_GOALS)
+DOCS_BOOTSTRAP_SHIM_CURRENT := 2
 ifneq ($(strip $(DOCS_BOOTSTRAP_SHIM)),$(DOCS_BOOTSTRAP_SHIM_CURRENT))
 $(warning the Makefile here is revision '$(strip $(DOCS_BOOTSTRAP_SHIM))' of docs-bootstrap's templates/Makefile and $(DOCS_BOOTSTRAP_VERSION) expects revision $(DOCS_BOOTSTRAP_SHIM_CURRENT) - compare it with $(DOCS_BOOTSTRAP)/templates/Makefile)
 endif

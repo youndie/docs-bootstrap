@@ -25,6 +25,17 @@
 # gate when docs/ or the backlog is not there - is in check.mk at the pinned version, and changes
 # arrive with a bump instead of with a re-copy.
 #
+# ONLY A GOAL THAT RUNS THE CHECKS LOADS THEM. A project adds targets of its own below this head - a
+# chart, a stand, a release - and make reads every included file, fetching the ones that are
+# missing, before it runs any goal at all. Included unconditionally, check.mk made each of those
+# targets, `make` alone and even `make -n` read the pin and download it on a fresh clone, and fail
+# offline. So it is included only when a goal asked for - on the command line, or the default goal
+# when there is none - is in DOCS_BOOTSTRAP_GOALS or is one of check.mk's own `docs-` targets; every
+# other goal runs without docs-bootstrap and without the network. A goal of the project's own that
+# leads to the checks (`ci: check build`) is added to DOCS_BOOTSTRAP_GOALS, above the line that says
+# nothing below is meant to be edited; one that is not added stops on a message naming that
+# variable.
+#
 # OVERRIDES. `DOCS_BOOTSTRAP=<dir>` runs the checks from a directory instead of the pinned ref: a
 # clone of docs-bootstrap you are changing, or - offline, or without GitHub Actions - a committed
 # copy of its check.mk, scripts/ and .claude-plugin/. That last one is the copy route again, with its
@@ -47,7 +58,13 @@ DOCS_BOOTSTRAP_PIN ?= .github/workflows/check.yaml
 DOCS_BOOTSTRAP_REPO ?= youndie/docs-bootstrap
 DOCS_BOOTSTRAP_CACHE ?= .docs-bootstrap
 # The revision of this file. check.mk says so when a newer docs-bootstrap expects a newer one.
-DOCS_BOOTSTRAP_SHIM := 1
+DOCS_BOOTSTRAP_SHIM := 2
+
+# The goals that load the checks - and so read the pin and, on a fresh clone, fetch it. check.mk's
+# `docs-` targets load them by themselves. A goal of this repository's own that runs one of these
+# goes here too, e.g. for `ci: check build`:
+#	DOCS_BOOTSTRAP_GOALS += ci
+DOCS_BOOTSTRAP_GOALS := check gate report fix
 
 .DEFAULT_GOAL := help
 .PHONY: help check gate report fix
@@ -71,6 +88,11 @@ fix: docs-fix
 
 # -- where the checks come from. Nothing below is meant to be edited. ------------------------------
 
+# The goals this run was asked for: the command line's, or the default goal when it names none.
+DOCS_BOOTSTRAP_ASKED := $(or $(MAKECMDGOALS),$(.DEFAULT_GOAL))
+
+ifneq ($(filter $(DOCS_BOOTSTRAP_GOALS) docs-%,$(DOCS_BOOTSTRAP_ASKED)),)
+
 ifndef DOCS_BOOTSTRAP
 DOCS_BOOTSTRAP_REF := $(sort $(shell sed -n -E 's|^[[:space:]]*(-[[:space:]]*)?uses:[[:space:]]*"?$(DOCS_BOOTSTRAP_REPO)@([^"[:space:]]+).*|\2|p' $(DOCS_BOOTSTRAP_PIN) 2>/dev/null))
 ifeq ($(words $(DOCS_BOOTSTRAP_REF)),0)
@@ -85,6 +107,15 @@ $(error DOCS_BOOTSTRAP=$(DOCS_BOOTSTRAP) holds no check.mk)
 endif
 
 include $(DOCS_BOOTSTRAP)/check.mk
+
+else
+
+# Not loaded, so no `docs-` target exists in this run. A goal that reaches one anyway is missing from
+# DOCS_BOOTSTRAP_GOALS, and make's own "No rule to make target" would not say so.
+docs-%:
+	@echo "$@ is a target of docs-bootstrap's check.mk, which this run did not load: '$(DOCS_BOOTSTRAP_ASKED)' is not in DOCS_BOOTSTRAP_GOALS ($(strip $(DOCS_BOOTSTRAP_GOALS))). Add the goal that leads to $@ to DOCS_BOOTSTRAP_GOALS in the Makefile." >&2; exit 2
+
+endif
 
 # The fetch. A tarball of the ref rather than a clone: a tag, a branch and a commit SHA (what
 # Renovate writes when it pins digests) are all one URL, and no history is needed. Unpacked next to

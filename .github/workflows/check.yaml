@@ -93,3 +93,32 @@ jobs:
           echo "no docs/ tree: $NO_DOCS, a Makefile of copies: $COPIED"
           test "$NO_DOCS" = failure || { echo "::error::the action passed on a directory with no docs/ tree"; exit 1; }
           test "$COPIED" = failure || { echo "::error::the action passed over a Makefile that does not run its checks"; exit 1; }
+
+  # The template the way a fresh clone of a project runs it outside CI, with no DOCS_BOOTSTRAP: the
+  # one place the real download from GitHub is exercised. script_selftest.py holds the same cases
+  # with curl stubbed. A goal of the project's own runs with every route out closed and fetches
+  # nothing; `make check` then fetches the ref the workflow pins - this commit - and passes on it.
+  template:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install pyyaml
+
+      - env:
+          REF: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          mkdir consumer && cp -r example/. consumer/
+          { cat templates/Makefile; printf '\nhello:\n\t@echo hello from the project\n'; } > consumer/Makefile
+          mkdir -p consumer/.github/workflows
+          printf '      - uses: youndie/docs-bootstrap@%s\n' "$REF" > consumer/.github/workflows/check.yaml
+          cd consumer
+          closed=http://127.0.0.1:9
+          http_proxy=$closed https_proxy=$closed HTTPS_PROXY=$closed ALL_PROXY=$closed make hello
+          test ! -e .docs-bootstrap || { echo "::error::a goal of the project's own fetched the checks"; exit 1; }
+          make check REPOS=.
+          test -f ".docs-bootstrap/$REF/check.mk" || { echo "::error::make check did not fetch $REF"; exit 1; }
