@@ -47,10 +47,14 @@ way to silence any anchor at all. A versioned file, a Maven coordinate, or `owne
 `@ref`) can be fetched by a reader who wants to check the claim; "Ktor" cannot. An address whose
 left side does not is reported as **missing**, saying so - a narrow escape hatch, deliberately.
 
-Which repository to look in is decided by the "Service" column of the anchor table: a service id
-leads to `<docs>/services/<id>.md`, whose `repo_url` gives the name of the clone (its last path
-segment). If that fails, the path is looked for in every repository at once - and then the report
-shows where it was found.
+WHICH REPOSITORY. An anchor is looked for in its own repository and nowhere else: the one its first
+segment names (`konekt/server/...`, when a clone called konekt is under --repos); else the one the
+"Service" column of its table names, through `<docs>/services/<id>.md` and the last segment of its
+`repo_url`; else the one the documentation lives in. A file by that path in some other repository is
+not this anchor's file, and is reported as missing, saying where it was seen. Only when none of the
+three is known is every repository searched, and then a path two of them have is ambiguous rather
+than found. Under `--repos .` the trees are this repository's own directories, and a match in any of
+them counts.
 
 WITHOUT --repos THE SCRIPT ASSERTS NOTHING. "Not checked" and "no violations" are different
 statements; the first one is printed explicitly.
@@ -358,8 +362,13 @@ def _within(anchor, found, trees):
                 lines[0], lines[1], found["repo"], found["at"], count)}
 
 
-def resolve(anchor, trees, svc2repo):
-    """Looks the anchor up: first in the repository the hint names, then in all of them."""
+def resolve(anchor, trees, svc2repo, own="", single=False):
+    """Looks the anchor up in the repository it belongs to.
+
+    `own` is the tree the documentation itself lives in, if any. `single` says the trees are the
+    modules of one repository - `--repos` is the documented repository itself - rather than
+    repositories side by side.
+    """
     what = anchor.get("external")
     if what:
         # A placeholder is a pattern, not an address, and the notation is documented with one -
@@ -388,6 +397,10 @@ def resolve(anchor, trees, svc2repo):
     if not (re.search(r"\.[A-Za-z0-9]{1,6}(/|$)", p) or is_dir or STRUCTURAL.search(p)):
         return {"status": "skipped", "why": "looks like a class name, not a path"}
 
+    # The repository the anchor names, if its first segment is the name of one of the trees:
+    # `konekt/server/.../Application.kt` lives in konekt and nowhere else.
+    named = p.split("/", 1)[0] if "/" in p else ""
+
     # `...` in the middle is the ordinary abbreviation: server/.../routes/loans.py. The search uses
     # the last meaningful fragment, which is the most specific one.
     if "/.../" in p or p.startswith(".../"):
@@ -396,27 +409,85 @@ def resolve(anchor, trees, svc2repo):
             return {"status": "skipped", "why": "an abbreviation with no path left"}
 
     hint = svc2repo.get(anchor["service_hint"], "")
-    order = ([hint] if hint in trees else []) + [r for r in trees if r != hint]
+    owner = hint if hint in trees else (own if own in trees else "")
+    # A path from the root of the anchor's own repository is that, even when its first directory
+    # shares a name with a sibling clone: `client/src/...` in a repository with a `client` module.
+    if not single and owner and (p in trees[owner]["files"] or p in trees[owner]["dirs"]):
+        return _within(anchor, {"status": "found", "repo": owner, "at": p, "exact": True}, trees)
+    if named in trees:
+        # NAMED, SO LOOKED FOR THERE ONLY. Matched against every tree, the path with its first
+        # segment cut off - `.github/workflows/deploy.yml`, `gradle/libs.versions.toml` - is in half
+        # the repositories on a laptop, and an anchor into a repository that is not checked out was
+        # "found" in whichever sibling sorted first.
+        hits = _matches(trees, [named], p)
+        return _within(anchor, hits[0], trees) if hits else _missing(p, trees)
+    if single:
+        # The trees are the modules of the one repository being documented, so a match in any of
+        # them is a match in that repository.
+        order = ([hint] if hint in trees else []) + [r for r in trees if r != hint]
+        hits = _matches(trees, order, p, first_only=True)
+        return _within(anchor, hits[0], trees) if hits else _missing(p, trees)
 
+    # The trees are repositories. The anchor belongs to the one its service names, or else to the
+    # one the documentation lives in; a match found only in some OTHER repository is not this
+    # anchor's file, however well its suffix fits, and counting it as found is how a rotten anchor
+    # hides. Without either, a match is the anchor's only when exactly one repository has it.
+    if owner:
+        hits = _matches(trees, [owner], p)
+        if hits:
+            return _within(anchor, hits[0], trees)
+        elsewhere = _matches(trees, [r for r in trees if r != owner], p)
+        if elsewhere:
+            return {"status": "missing", "elsewhere": [h["repo"] + "/" + h["at"] for h in elsewhere],
+                    "why": "not in {0}, the anchor's repository; a file by that path is in {1} - "
+                           "name the repository, or write the path as an address (SPEC 4.1)"
+                           .format(owner, ", ".join(sorted({h["repo"] for h in elsewhere})))}
+        return _missing(p, trees)
+    hits = _matches(trees, list(trees), p)
+    if len({h["repo"] for h in hits}) == 1:
+        return _within(anchor, hits[0], trees)
+    if hits:
+        return {"status": "missing", "elsewhere": [h["repo"] + "/" + h["at"] for h in hits],
+                "why": "ambiguous: {0} repositories have it ({1}) and nothing says which is meant - "
+                       "start the path with the repository's name"
+                       .format(len({h["repo"] for h in hits}),
+                               ", ".join(sorted({h["repo"] for h in hits})))}
+    return _missing(p, trees)
+
+
+def _matches(trees, order, p, first_only=False):
+    """Where `p` resolves in the given trees, in order: one hit per repository at most.
+
+    An exact match from the repository root, the same path with the repository's OWN name cut off
+    the front, or a suffix match - the anchor written from a module root, or abbreviated. The cut is
+    taken only when the first segment is that repository's name: taken for any repository, it let
+    `mani/.github/workflows/deploy.yml` resolve to another project's workflow."""
+    hits = []
+    first, rest = p.split("/", 1) if "/" in p else (p, "")
     for repo in order:
         tree = trees[repo]
-        # An exact match from the repository root, or the same path with the repository name cut
-        # off the front.
-        for candidate in (p, p.split("/", 1)[1] if "/" in p else p):
-            if candidate in tree["files"] or candidate in tree["dirs"]:
-                return _within(anchor, {"status": "found", "repo": repo, "at": candidate,
-                                        "exact": True}, trees)
-        # A suffix match: the anchor was written from the module root, or abbreviated.
-        suffix = "/" + p
-        hit = next((f for f in tree["files"] if f.endswith(suffix)), None) \
-            or next((d for d in tree["dirs"] if d.endswith(suffix)), None)
+        hit = None
+        for candidate in (p, rest if first == repo and rest else None):
+            if candidate and (candidate in tree["files"] or candidate in tree["dirs"]):
+                hit = {"status": "found", "repo": repo, "at": candidate, "exact": True}
+                break
+        if hit is None:
+            suffix = "/" + p
+            at = next((f for f in tree["files"] if f.endswith(suffix)), None) \
+                or next((d for d in tree["dirs"] if d.endswith(suffix)), None)
+            if at:
+                hit = {"status": "found", "repo": repo, "at": at, "exact": False}
         if hit:
-            return _within(anchor, {"status": "found", "repo": repo, "at": hit, "exact": False},
-                           trees)
+            hits.append(hit)
+            if first_only:
+                break
+    return hits
 
-    # Not found. A file of that name may simply have moved - a refactor that shuffles modules
-    # around is the usual cause. Saying where a file with the same name lives now turns the report
-    # into repair instructions.
+
+def _missing(p, trees):
+    """Not found. A file of that name may simply have moved - a refactor that shuffles modules
+    around is the usual cause. Saying where a file with the same name lives now turns the report
+    into repair instructions."""
     leaf = p.rstrip("/").split("/")[-1]
     if leaf and "." in leaf:
         for repo, tree in trees.items():
@@ -469,8 +540,14 @@ def main():
         return 2 if args.check else 0
 
     svc2repo = repo_by_service(root)
+    # Which tree holds the documentation, and whether the trees are repositories at all: with
+    # `--repos .` they are this repository's own directories.
+    real_root = os.path.realpath(root)
+    own = next((name for name, tree in trees.items()
+                if real_root.startswith(os.path.realpath(tree["root"]) + os.sep)), "")
+    single = not own and real_root.startswith(os.path.realpath(args.repos) + os.sep)
     for a in anchors:
-        a.update(resolve(a, trees, svc2repo))
+        a.update(resolve(a, trees, svc2repo, own, single))
 
     missing = [a for a in anchors if a["status"] == "missing"]
     skipped = [a for a in anchors if a["status"] == "skipped"]
@@ -503,6 +580,8 @@ def main():
                 print("      {0}{1}{2}".format(a["path"], at, mark))
                 if a.get("why"):
                     print("          {0}".format(a["why"]))
+                for at in a.get("elsewhere", [])[:3]:
+                    print("          seen at: {0}".format(at))
                 for at in a.get("moved_to", []):
                     print("          possibly now: {0}/{1}".format(a["moved_repo"], at))
         print()

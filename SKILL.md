@@ -182,6 +182,10 @@ that really has rotted. [SPEC §4.1](SPEC.md).
 A document marked `status: deprecated` keeps its anchors as a record of where the behaviour was;
 the checker skips them and says so ([SPEC §4](SPEC.md)).
 
+An anchor resolves in its own repository only — the one its first segment names, else its service's,
+else the one the documentation lives in — so a path into another repository starts with that
+repository's name, or is an address when the checker will not have a clone of it.
+
 ### 5. BDD scenarios are acceptance criteria
 
 Write them against behaviour you have confirmed in the code: real status codes, real error strings.

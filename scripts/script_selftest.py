@@ -465,6 +465,39 @@ def main():
         errors, out = no_anchor_errors(tree)
         expect_true("docs_check accepted a document with no anchor at all", bool(errors), out)
 
+    # An anchor is looked for in ITS repository. Matched against every sibling, `a/x.md` - repository
+    # `a`, not checked out here - resolved to `b`'s x.md once its first segment was cut off, and a
+    # path missing from the documented repository was "found" in whichever sibling had it.
+    with tempfile.TemporaryDirectory() as root:
+        repos = os.path.join(root, "repos")
+        write(repos, "b/x.md", "x\n")
+        write(repos, "b/src/thing.py", "x = 1\n")
+        write(repos, "b/src/only_b.py", "x = 1\n")
+        write(repos, "c/src/thing.py", "x = 1\n")
+        write(repos, "own/src/live.py", "x = 1\n")
+        body = "\n`b/x.md`, `src/thing.py`, `src/live.py`.\n"
+        write(repos, "own/docs/features/feature-x.md",
+              doc("active", "a/x.md", body + "And `src/only_b.py`.\n"))
+        code, report, out = anchors(os.path.join(repos, "own"), repos)
+        status = dict((a["path"], a["status"]) for a in (report or {}).get("anchors", []))
+        expect_true("code_anchors found an anchor outside its repository: `a/x.md` with only "
+                    "`b/x.md` checked out, or a path the documented repository lacks in a sibling",
+                    status == {"a/x.md": "missing", "b/x.md": "found", "src/thing.py": "missing",
+                               "src/live.py": "found", "src/only_b.py": "missing"}, out)
+
+        # A documentation tree that is none of the repositories, and no service to say which: a path
+        # one repository has is found there, a path two have is ambiguous, and `a/x.md` is still not
+        # `b`'s x.md.
+        tree = os.path.join(root, "doctree")
+        write(tree, "docs/features/feature-x.md",
+              doc("active", "src/only_b.py", body + "And `a/x.md`.\n"))
+        code, report, out = anchors(tree, repos)
+        status = dict((a["path"], a["status"]) for a in (report or {}).get("anchors", []))
+        expect_true("code_anchors chose between two repositories that both have a path, or found "
+                    "`a/x.md` in b", status.get("src/only_b.py") == "found"
+                    and status.get("src/thing.py") == "missing" and status.get("a/x.md") == "missing",
+                    out)
+
     # -- backlog numbers against the base: a rename is not a theft ------------------------------------
     item = "---\nid: B-01\ntitle: \"{0}\"\nstatus: open\n---\n\n{1}\n"
     with tempfile.TemporaryDirectory() as repo:
@@ -542,8 +575,8 @@ A scenario with an `**Automated:**` line names its test; this sentence is about 
     print("script_selftest: every case passed - absent subjects refused by the scripts and by the "
           "Makefile, the pin read once and never guessed, uncounted scenarios reported, a shipped "
           "change without a version bump and a template pinning another release refused, reports "
-          "that cannot block the gate, anchors not looked for where they should not be and anchors "
-          "citing lines looked for, a renamed "
+          "that cannot block the gate, anchors not looked for where they should not be, anchors "
+          "citing lines looked for and anchors found only in their own repository, a renamed "
           "item told from a stolen number, `**Automated:**` lines read as lists and counted only in "
           "scenarios, and no guard fires on the shape it allows")
     return 0
