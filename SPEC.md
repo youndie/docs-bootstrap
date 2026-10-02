@@ -439,6 +439,29 @@ is written as an address (§4.1).
 
 Paths in backticks that contain `*`, `{`, `<` or `>` are treated as patterns and skipped.
 
+**Not everything written like a path is one.** Besides patterns, the checker skips four kinds of
+word with a slash, each only where the tree cannot hold it — so a file that is there is still found,
+and a file that went is still missing:
+
+* a layer of this documentation, one segment with its slash — `features/`, `services/`, `api/`
+  (§1) — unless the code has a directory of that name; found only in the documentation tree, it was
+  the document pointing at its own layer;
+* a git ref — `origin/main`, `refs/tags/v1.0`;
+* a path the anchor's repository ignores — `build/libs`, `server/build/bin/` — asked of git, which
+  never reports a tracked file; build output and local state are in no checkout, so such an anchor
+  was missing for ever;
+* a class in its binary form — `jdk/internal/javac/PreviewFeature`: lower-case package segments and
+  a type name with two capitals or more, because `deploy/Dockerfile` has the same shape with one.
+
+What the shape cannot tell from a path is left to the writer, in a form that says what it is. A JVM
+frame or member is written dotted, `bench.Pricing.quote` — `Pricing.quote` and `Pricing.kt` differ
+by nothing a pattern can hold. A section of somebody's specification is an address into it (§4.1)
+or prose. A directory of an installed runtime, image or toolchain carries its root —
+`$JAVA_HOME/jmods`, `<image>/bin/` — and a URL segment its host or slash, `/tree/<ref>`. One
+segment is the weakest anchor there is, found in any directory of that name: `runtime/` meaning a
+runtime image resolves to whatever package is called `runtime`, so a directory of the code is
+written with enough of its path to be its own.
+
 **A `deprecated` document's anchors are not looked for.** Such a document describes behaviour that
 is gone and is kept for readers of old code (§6), so its paths say where something *was* and are
 expected to resolve to nothing. The checker names the documents it skipped instead of reporting

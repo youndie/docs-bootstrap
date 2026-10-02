@@ -774,6 +774,65 @@ def main():
         expect_true("code_anchors --repos . reported `./app/src/live.py` as missing",
                     report is not None and missing_paths(report) == [] and report["found"] == 1, out)
 
+    # -- code anchors: what is written like a path and is not one (SPEC 4) -----------------------------
+    # Through 0.3.10 each of these was missing for ever, in a tree that could never hold it: a layer
+    # of the documentation, a git ref, build output the repository ignores, a class in its binary
+    # form - and a consumer turning on --check had to reword every one. Held from the other side by
+    # what must stay as it was: a directory of the code named like a layer is found, a tracked file
+    # under an ignored directory is found, a file shaped like a class name that is there is found,
+    # an extensionless file of one capital that went (`src/app/Makefile`) is missing, and the forms
+    # SPEC 4 leaves to the writer - a JVM frame, a section of a specification, a runtime image's
+    # `bin/` - are still reported, so a rule that skipped too much fails here.
+    not_paths = {
+        "features/": "skipped", "services/": "skipped", "origin/main": "skipped",
+        "refs/tags/v1.0": "skipped", "build/libs": "skipped", "server/build/bin/": "skipped",
+        "jdk/internal/javac/PreviewFeature": "skipped",
+        "api/": "found", "build/keep.txt": "found", "src/app/runtime/": "found",
+        "src/gen/CodeGen": "found",
+        "src/app/Makefile": "missing", "src/app/gone.kt": "missing", "bin/": "missing",
+        "bench/Pricing.quote": "missing", "client/elicitation": "missing",
+    }
+    body = "\n" + "\n".join("* `{0}`".format(a) for a in not_paths) + "\n"
+    with tempfile.TemporaryDirectory() as root:
+        repos = os.path.join(root, "repos")
+        own = os.path.join(repos, "own")
+        write(own, ".gitignore", "build/\n")
+        write(own, "src/app/runtime/Main.kt", "x\n")
+        write(own, "lib/api/lib.api", "x\n")
+        write(own, "build/keep.txt", "x\n")
+        write(own, "src/gen/CodeGen", "x\n")
+        write(own, "docs/features/feature-x.md", doc("active", "src/app/runtime/Main.kt", body))
+        git(own, "init", "-q")
+        git(own, "add", "-A")
+        git(own, "add", "-f", "build/keep.txt")
+        git(own, "commit", "-q", "-m", "base")
+        code, report, out = anchors(own, repos)
+        status = dict((a["path"], a["status"]) for a in (report or {}).get("anchors", []))
+        expect_true("code_anchors read a layer, a git ref, ignored build output or a class name as a "
+                    "path, or skipped a path it should have looked for: {0}".format(sorted(
+                        (a, status.get(a), s) for a, s in not_paths.items() if status.get(a) != s)),
+                    all(status.get(a) == s for a, s in not_paths.items()), out)
+        why = dict((a["path"], a.get("why", "")) for a in (report or {}).get("anchors", []))
+        expect_true("code_anchors did not say why it skipped a layer, a git ref, ignored output and a "
+                    "class name", "layer" in why.get("features/", "")
+                    and "git ref" in why.get("origin/main", "")
+                    and "ignored by own" in why.get("build/libs", "")
+                    and "binary form" in why.get("jdk/internal/javac/PreviewFeature", ""), out)
+
+    # The same under `--repos .`, where the trees are walked modules rather than checkouts: what the
+    # walk prunes is ignored, and the documentation tree is not a tree at all.
+    with tempfile.TemporaryDirectory() as tree:
+        write(tree, "app/src/live.py", "x = 1\n")
+        write(tree, "lib/api/lib.api", "x\n")
+        write(tree, "docs/features/feature-x.md", doc(
+            "active", "app/src/live.py", "\n`server/build/libs/`, `features/`, `api/`, `bin/`.\n"))
+        code, report, out = anchors(tree, ".")
+        status = dict((a["path"], a["status"]) for a in (report or {}).get("anchors", []))
+        expect_true("code_anchors --repos . did not skip build output and a layer, or skipped a "
+                    "module's `api/` or an unexplained `bin/`: {0}".format(status),
+                    status == {"app/src/live.py": "found", "server/build/libs/": "skipped",
+                               "features/": "skipped", "api/": "found", "bin/": "missing"}, out)
+
     # -- addresses: the ref is what was read (SPEC 4.1) -----------------------------------------------
     # `owner/repo@ref` passed on its shape alone, so `@<a branch that only lives in somebody's clone>`
     # was as good as a commit. A ref has to look like a commit or a version tag; anything else, and no
