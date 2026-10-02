@@ -45,8 +45,11 @@ FOLDERS = ("research", "features", "screens", "api", "services")
 # (`uncounted-scenarios`); it runs in the gate, which is where a warning is read.
 SCENARIO = re.compile(r"^###\s+Scenario:\s*(.+?)\s*$", re.M)
 # The `**Automated:**` line (SPEC 3.1), taken whole: one line inside a scenario is one automated
-# scenario, whatever it names. What it names is read by references() below.
-AUTOMATED = re.compile(r"\*\*Automated:\*\*(.*)$")
+# scenario, whatever it names. What it names is read by references() below. The marker quoted in
+# backticks is prose ABOUT the line - "a scenario with an `**Automated:**` line names its test" -
+# and read as one, it put a note "outside any scenario, not counted" on four documents that had
+# nothing outside their scenarios.
+AUTOMATED = re.compile(r"(?<!`)\*\*Automated:\*\*(.*)$")
 # A heading that opens a section: `#` to `###`. A `####` under a scenario stays inside it.
 SECTION = re.compile(r"^(#{1,3})\s")
 FENCE = re.compile(r"^\s*(```|~~~)")
