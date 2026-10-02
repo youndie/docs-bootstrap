@@ -1,6 +1,6 @@
 {
   "name": "docs-bootstrap",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Layered, machine-checked documentation for a codebase whose primary reader is a coding agent.",
   "author": {
     "name": "Pavel Votyakov",

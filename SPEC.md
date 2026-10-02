@@ -388,6 +388,15 @@ inside an artefact (§4.1) may end the same way.
 the fragment. This can report a false "found" — two files with the same name in different modules —
 but practically never a false "missing", and the job of the check is to catch rot.
 
+**The tree is the anchor's own repository.** When the checker looks across several repositories, an
+anchor belongs to the one its first segment names, else to the one its service names (the
+`repo_url` of the service document), else to the one the documentation lives in. A file found only
+in some other repository is not the anchor's file and is reported missing; across repositories a
+suffix fits too much — `.github/workflows/deploy.yml` and `gradle/libs.versions.toml` are in most of
+them — and a false "found" hides exactly the rot the check is for. When none of the three is known,
+a path that two repositories have is ambiguous. A path into a repository the checker does not hold
+is written as an address (§4.1).
+
 Paths in backticks that contain `*`, `{`, `<` or `>` are treated as patterns and skipped.
 
 **A `deprecated` document's anchors are not looked for.** Such a document describes behaviour that
