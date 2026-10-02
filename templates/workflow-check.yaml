@@ -44,14 +44,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: youndie/docs-bootstrap@v0.3.8
+      - uses: youndie/docs-bootstrap@v0.3.9
 
   # Separate from the gate, and on a schedule rather than on a pull request, because an anchor rots
   # when somebody refactors a **different** repository. A pull request here is the least likely
   # moment for one to break, and running it there trains people to ignore a red build they did not
   # cause. It also does not block: a path quoted *as obsolete* is indistinguishable from a live one
-  # by machine, so the report is read by a person. Pass `target: report ANCHORS_ARGS=--check` once
-  # the stale list reaches zero.
+  # by machine, so the report is read by a person.
+  #
+  # To make it block, set `ANCHORS_ARGS ?= --check` in the Makefile rather than here: `make check`
+  # in the job above then fails on a path that resolves to nothing, in the pull request that broke
+  # it, and this job keeps running the same report on the default branch. Do it once the stale list
+  # is at zero and every path outside this repository is an address (SPEC 4.1), which nothing
+  # elsewhere can move - see check.mk.
   anchors:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -60,7 +65,7 @@ jobs:
 
       # The code lives in this checkout, so its parent is a directory whose one subdirectory is
       # this repository - which is exactly what REPOS (`..` by default) expects.
-      - uses: youndie/docs-bootstrap@v0.3.8
+      - uses: youndie/docs-bootstrap@v0.3.9
         with:
           target: report
 
@@ -82,6 +87,6 @@ jobs:
       #       done
       #     env:
       #       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      #   - uses: youndie/docs-bootstrap@v0.3.8
+      #   - uses: youndie/docs-bootstrap@v0.3.9
       #     with:
       #       target: report REPOS=repos
