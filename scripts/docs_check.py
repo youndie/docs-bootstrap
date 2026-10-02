@@ -82,10 +82,11 @@ REF_FIELDS = ("involved_services", "client_entries", "api",
 # familiar source extension. Deliberately loose - the question is "is there a way into the code
 # from here at all", not "is this exact path right"; whether the path still exists is the job of
 # code_anchors.py, which needs the repositories to answer.
+# Either may end in a line or a range, `loans.py:40-52` (SPEC 4).
 CODE_ANCHOR = re.compile(
-    r"`[A-Za-z0-9_.-]+/[A-Za-z0-9_./{}<>-]*`"
+    r"`[A-Za-z0-9_.-]+/[A-Za-z0-9_./{}<>-]*(?::\d+(?:-\d+)?)?`"
     r"|`[A-Za-z0-9_]+\.(?:py|js|ts|tsx|jsx|go|rs|rb|java|kt|kts|cs|php|swift"
-    r"|sql|sh|yaml|yml|toml|json|tf)`"
+    r"|sql|sh|yaml|yml|toml|json|tf)(?::\d+(?:-\d+)?)?`"
 )
 
 ALLOWED_STATUS = {"draft", "active", "deprecated"}

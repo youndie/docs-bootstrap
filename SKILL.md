@@ -162,7 +162,9 @@ in the code.
 
 Every document needs at least one table of paths into the code. This is the single thing that makes
 the documentation worth having for an agent, and it is the one structural rule the checker
-enforces. Point at the feature directory or the key file — not at a line number, which moves.
+enforces. Point at the feature directory or the key file — not at a line number, which moves. Where
+the place in a file is the point (research citing what it read), `loans.py:40-52` is checked as the
+file, and as missing once the file is shorter than the range ([SPEC §4](SPEC.md)).
 
 The one exception is research, which legitimately predates the code; there the checker warns
 instead of failing, and what you cite is the artefact you verified against — **as an address inside
