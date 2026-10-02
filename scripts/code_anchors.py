@@ -51,9 +51,17 @@ shows where it was found.
 WITHOUT --repos THE SCRIPT ASSERTS NOTHING. "Not checked" and "no violations" are different
 statements; the first one is printed explicitly.
 
+A DEPRECATED DOCUMENT IS NOT LOOKED IN. `status: deprecated` (SPEC 6) says the behaviour is gone
+and the document is kept for readers of old code, so its anchors name where something WAS and are
+supposed to resolve to nothing. Reported as rot, they would stay on the list for as long as the
+document is kept - which is the point of keeping it - and a list with permanent entries is a list
+nobody reads. The documents skipped are named in the output, so a skip is never silent.
+
 `--repos DIR` is a directory whose subdirectories are the repositories (`--repos ..` when the
-clones sit side by side). A subdirectory that is a git checkout is read with `git ls-files`, which
-respects .gitignore for free; anything else is walked with the usual build directories skipped.
+clones sit side by side, `--repos .` when the code is the subdirectories of this repository). A
+subdirectory that is a git checkout - a clone, or a worktree, where `.git` is a file - is read with
+`git ls-files`, which respects .gitignore for free; anything else is walked with the usual build
+directories skipped.
 """
 import argparse
 import json
@@ -103,9 +111,17 @@ STRUCTURAL = re.compile(
 
 # Directories that are build output or tooling state: never worth indexing, and big enough to make
 # the walk slow if they are.
+#
+# `.docs-bootstrap` is where a consumer's Makefile fetches these checks, and the fetch carries
+# docs-bootstrap's own example - `features/`, `services/`, `routes/loans.py` and the rest. A tree
+# that gets walked rather than listed by git indexed all of it, and an anchor that had rotted in the
+# project was "found" in the example of the tool checking it.
 IGNORED_DIRS = {".git", ".hg", ".svn", "node_modules", "build", "dist", "out", "target",
                 "__pycache__", ".venv", "venv", ".tox", ".idea", ".gradle", ".next",
-                "vendor", "coverage", ".mypy_cache", ".pytest_cache"}
+                "vendor", "coverage", ".mypy_cache", ".pytest_cache", ".docs-bootstrap"}
+
+# `status: deprecated` in the frontmatter - see the module docstring.
+DEPRECATED = re.compile(r"^status:\s*[\"']?deprecated[\"']?\s*(?:#.*)?$", re.M)
 
 
 def _utf8_stdout():
@@ -161,8 +177,14 @@ def _dirs_of(files):
 
 
 def _git_tree(path):
-    """The tracked files of a git checkout, or None if this is not one / git is unavailable."""
-    if not os.path.isdir(os.path.join(path, ".git")):
+    """The tracked files of a git checkout, or None if this is not one / git is unavailable.
+
+    `.git` is a directory in a clone and a FILE in a worktree (`gitdir: ...`), and both are
+    checkouts. Asking for a directory sent every worktree down the walk below, which reads what git
+    would have ignored - build output under a name not in IGNORED_DIRS, a fetched copy of these
+    checks - and resolves anchors against it.
+    """
+    if not os.path.exists(os.path.join(path, ".git")):
         return None
     try:
         res = subprocess.run(["git", "ls-files"], cwd=path,
@@ -204,7 +226,14 @@ def load_trees(repos_root, skip=()):
     skip = {os.path.realpath(p) for p in skip}
     for name in sorted(os.listdir(repos_root)):
         path = os.path.join(repos_root, name)
-        if not os.path.isdir(path) or name.startswith(".") or name in IGNORED_DIRS:
+        if not os.path.isdir(path) or name in IGNORED_DIRS:
+            continue
+        # Dot-directories are not repositories - `.git`, `.gradle`, `.idea` hold no code to resolve
+        # anchors against - with one exception. When `--repos .` makes this repository's own
+        # subdirectories the trees, `.github` is one of them, and `.github/workflows/check.yaml` is
+        # a path documents legitimately cite. Skipped, an anchor at a file that plainly exists was
+        # reported rotten for ever - while the walk below, inside a tree, kept `.github` all along.
+        if name.startswith(".") and name != ".github":
             continue
         if os.path.realpath(path) in skip:
             continue
@@ -241,8 +270,18 @@ def design_anchors(text):
     return ["{0}/{1}.png".format(base, stem) for stem in DESIGN_STATE.findall(states.group(1))]
 
 
-def collect_anchors(root):
-    """The anchors of every document, with a guess at the service from the table row."""
+def is_deprecated(text):
+    """Does the frontmatter say `status: deprecated`? Only the frontmatter: the same words in the
+    body - a quoted template, a paragraph about the field - say nothing about this document."""
+    front = text.split("---", 2)
+    return len(front) >= 3 and bool(DEPRECATED.search(front[1]))
+
+
+def collect_anchors(root, deprecated=None):
+    """The anchors of every document, with a guess at the service from the table row.
+
+    Documents with `status: deprecated` are left out and, when `deprecated` is a list, named in it.
+    """
     anchors = []
     for folder in FOLDERS:
         path = os.path.join(root, folder)
@@ -254,6 +293,10 @@ def collect_anchors(root):
             doc = "{0}/{1}".format(folder, name)
             with open(os.path.join(path, name), encoding="utf-8") as fh:
                 text = fh.read()
+            if is_deprecated(text):
+                if deprecated is not None:
+                    deprecated.append(doc)
+                continue
             # The tables first: they are the only place with a service column.
             in_table = {}
             for cells in TABLE_ROW.findall(text):
@@ -369,7 +412,8 @@ def main():
         print("no docs tree at {0} - nothing checked".format(root))
         return 0
 
-    anchors = collect_anchors(root)
+    deprecated = []
+    anchors = collect_anchors(root, deprecated)
     if not args.repos:
         print("Anchors in the documentation: {0}".format(len(anchors)))
         print("Their existence was NOT checked: --repos was not given. "
@@ -400,7 +444,7 @@ def main():
     if args.json:
         print(json.dumps({"total": len(anchors), "found": len(found),
                           "missing": len(missing), "skipped": len(skipped),
-                          "external": len(external),
+                          "external": len(external), "deprecated_documents": deprecated,
                           "repos": sorted(trees), "anchors": anchors},
                          ensure_ascii=False, indent=2))
         return 1 if (missing and args.check) else 0
@@ -442,6 +486,9 @@ def main():
     if skipped:
         print("Skipped as patterns: {0}\n"
               .format(", ".join(sorted({a["path"] for a in skipped}))))
+    if deprecated:
+        print("Not looked in - status: deprecated, the anchors say where the behaviour was: {0}\n"
+              .format(", ".join(deprecated)))
 
     if missing:
         print("Rotten anchors: {0}. A path in another repository gets renamed without anyone "

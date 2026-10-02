@@ -65,16 +65,14 @@ Sections marked `<!-- optional -->` can be deleted.
 
 ## Checks
 
-Run from the `example/` directory. In a real project the scripts live in the same repository as the
-documents; here they are one level up, because the example shares them with docs-bootstrap itself.
+Run from docs-bootstrap's root. A real project's Makefile runs the checks at the version its workflow
+pins; this example is run through the same Makefile (`templates/Makefile`) with the checks taken
+from this checkout, so the gate it passes is the gate that ships.
 
 ```bash
 pip install pyyaml
-python3 ../scripts/backlog_index.py --check
-python3 ../scripts/docs_check.py
-python3 ../scripts/coverage_map.py --check
-python3 ../scripts/bdd_report.py
-python3 ../scripts/code_anchors.py --repos ..
+make check      # the gate, then the reports
+make fix        # regenerate the backlog index, append missing coverage-map lines
 ```
 
 ## Coverage map

@@ -214,8 +214,8 @@ def main():
     for name, msg in problems:
         print("  [{0}] {1}".format(name, msg))
     if problems:
-        print("\nDiscrepancies: {0}. To append placeholders: "
-              "python3 scripts/coverage_map.py --fix".format(len(problems)))
+        print("\nDiscrepancies: {0}. To append placeholders: `make fix` (where the checks are "
+              "copied in: python3 scripts/coverage_map.py --fix)".format(len(problems)))
         return 1
     print("The coverage map matches the files")
     return 0

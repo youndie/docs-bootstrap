@@ -19,7 +19,8 @@ decides not to let it fall.
 
 The existence check is switched on by `--repos DIR`, a directory whose subdirectories are the
 service repositories. Without the flag the script prints "not checked" - which is not the same as
-"everything is in place".
+"everything is in place". A test whose repository or module cannot be found under DIR is not looked
+for, and is listed as such: not looked for is not found.
 
 The only non-zero exit comes from that check: a scenario naming a test that the repository does
 not contain is a statement of fact that turned out to be false, and unlike a missing automation
@@ -43,23 +44,49 @@ FOLDERS = ("research", "features", "screens", "api", "services")
 # cannot tell that 0 from a document that has none. docs_check.py can, and warns
 # (`uncounted-scenarios`); it runs in the gate, which is where a warning is read.
 SCENARIO = re.compile(r"^###\s+Scenario:\s*(.+?)\s*$", re.M)
-# `**Automated:** <repository> <test>`, or `**Automated:** <test>` when the documentation covers a
-# single repository. Backticks may wrap either part or neither. Two shapes of test reference are
-# accepted because both are what people write:
+# The `**Automated:**` line (SPEC 3.1), taken whole: one line inside a scenario is one automated
+# scenario, whatever it names. What it names is read by references() below.
+AUTOMATED = re.compile(r"\*\*Automated:\*\*(.*)$")
+# A heading that opens a section: `#` to `###`. A `####` under a scenario stays inside it.
+SECTION = re.compile(r"^(#{1,3})\s")
+FENCE = re.compile(r"^\s*(```|~~~)")
+
+# One reference: `<repository> <test>`, or `<test>` when the documentation covers a single
+# repository. Two shapes of test are accepted because both are what people write:
 #
 #     **Automated:** catalog-api LoanRoutesTest
 #     **Automated:** `tests/test_store.py::test_unacked_task_returns_to_the_front`
 #
-# The repository is optional and comes first, so the pattern only treats a leading token as one
-# when a second token follows it. A path::test reference is a single token - the character class
-# for a repository name has no slash in it - and therefore reads as the test, which is right.
-# Requiring the pair was how a whole documentation tree could carry a link on every scenario and
-# be reported as having none.
-AUTOMATED = re.compile(
-    r"\*\*Automated:\*\*\s*"
-    r"(?:`?([A-Za-z0-9][A-Za-z0-9._-]*)`?[ \t]+)?"
-    r"`?([A-Za-z0-9_][A-Za-z0-9_./:#-]*)`?"
-)
+# The repository is optional and comes first, so a leading token is one only when a second token
+# follows it; a single token is always the test. Requiring the pair was how a whole documentation
+# tree could carry a link on every scenario and be reported as having none. Backticks may wrap
+# either part, both, or neither. The repository may be a MODULE PATH - `feature/roaming-server-data`
+# - because a repository of many modules is the ordinary shape, and verify() looks a module up
+# inside each checkout as well as beside them.
+#
+# A LOCATOR - `path::name`, `path#name`, or `TestClass.name` - names the test after the separator,
+# and that name may have spaces in it, because Kotlin and Spock test names are sentences:
+# `CommandsTest.kt::TTL is -2 for a missing key`, `KoreKoinTest.routes resolve from the container`.
+# Read as one token, the first was the test `CommandsTest.kt::TTL` with the needle `TTL`, and the
+# second was grepped for as `KoreKoinTest.routes`, which no source file contains.
+_REPO = r"([A-Za-z0-9][A-Za-z0-9._/-]*)"
+_TEST = r"([A-Za-z0-9_][A-Za-z0-9_./:#-]*)"
+_LOCATOR = r"([^\s`:#]+(?:::|#)[^`]*[^`\s]|[A-Z][A-Za-z0-9_]*\.[^`]*[^`\s])"
+_LEAD = r"^`?(?:" + _REPO + r"`?[ \t]+`?)?"
+REFERENCE = re.compile(_LEAD + _TEST)                     # one at the start of a text
+WHOLE = re.compile(_LEAD + _TEST + r"`?$")                # a text that is one and nothing else
+LOCATOR = re.compile(_LEAD + _LOCATOR + r"`?$")
+# `TestClass.member`: the member is the needle. `FooTest.kt` is a file, not a member called `kt`.
+MEMBER = re.compile(r"^[A-Z][A-Za-z0-9_]*\.(.+)$")
+FILE_NAME = re.compile(r"^\S+\.[a-z0-9]{1,5}$")
+# A path to a file or a directory, with no `::` or `#`: next to a reference, where it lives or what
+# it produced - `test_renewal_limit_reached` in `tests/test_loan_rules.py`, a report in
+# `bench/reports/b-16/`. Not a test.
+PATH = re.compile(r"^[^\s:#]*/(?:[^\s/:#]+\.[A-Za-z0-9]{1,6}|)$")
+# Commentary after the list: a dash or a semicolon outside backticks ends what is read, and a
+# parenthesis outside backticks is an aside - `SagaTimerSinkTest` (in the engine's repository, on a
+# branch) names one test, not three.
+COMMENTARY = re.compile(r"\s[\u2014\u2013-]\s|;")
 
 
 def test_needle(reference):
@@ -67,12 +94,142 @@ def test_needle(reference):
 
     `tests/test_store.py::test_x` is a locator, not a name: the file may be renamed while the test
     keeps its name, and the whole string occurs nowhere in the source. What does occur is the last
-    segment after `::` or `#`, which is the name of the function or method.
+    segment after `::` or `#`, which is the name of the function or method - and, for
+    `LoanRoutesTest.renewalIsRefused`, what follows the class.
     """
     for separator in ("::", "#"):
         if separator in reference:
-            reference = reference.rsplit(separator, 1)[-1]
-    return reference
+            return reference.rsplit(separator, 1)[-1].strip()
+    member = MEMBER.match(reference)
+    if member and not FILE_NAME.match(reference):
+        return member.group(1).strip()
+    return reference.strip()
+
+
+def _outside_backticks(text, pattern):
+    """Where `pattern` first matches outside backticks, or None."""
+    quoted = False
+    for i, ch in enumerate(text):
+        if ch == "`":
+            quoted = not quoted
+        elif not quoted and pattern.match(text, i):
+            return i
+    return None
+
+
+def _without_asides(text):
+    """The text with its parentheses outside backticks taken out."""
+    out, quoted, depth = [], False, 0
+    for ch in text:
+        if ch == "`" and not depth:
+            quoted = not quoted
+        if not quoted and ch == "(":
+            depth += 1
+        if not depth:
+            out.append(ch)
+        if not quoted and ch == ")" and depth:
+            depth -= 1
+    return "".join(out)
+
+
+def _pieces(text):
+    """The comma-separated parts of a text, a comma inside backticks not counting: a test name or a
+    quotation in a span may hold one."""
+    out, cur, quoted = [], [], False
+    for ch in text:
+        if ch == "`":
+            quoted = not quoted
+        if ch == "," and not quoted:
+            out.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    out.append("".join(cur))
+    return [p.strip() for p in out if p.strip()]
+
+
+def _one(text):
+    """(repository, test) if the text is one reference and nothing else, otherwise None."""
+    m = LOCATOR.match(text) or WHOLE.match(text)
+    return m.groups() if m else None
+
+
+def references(rest):
+    """The tests one `**Automated:**` line names, as dicts of repository, test and needle.
+
+    SEVERAL TESTS ON ONE LINE ARE A LIST, separated by commas:
+
+        **Automated:** `e2e RoamingScenarioTest`, `feature/roaming-server-data RoamingPackageTest`
+
+    A pattern anchored on the marker matches once, so the second reference used to be dropped - not
+    reported, not looked for. What is read:
+
+      * the line up to a dash or a semicolon outside backticks, less its parentheses; the rest is
+        commentary;
+      * each comma-separated part that is one reference and nothing else - on a line that uses
+        backticks, one that ends on a backtick;
+      * on a line that uses backticks, a part with none is prose, and of a part that is prose around
+        a span, the first span that is one reference - `PurchaseSagaTest`, and against a moved clock
+        `SuspendedSagaExpiryTest` is two tests. A quotation is not one (`a purchase that is
+        confirmed completes` is longer than a reference), and after the first part neither is a bare
+        path, which says where a test lives;
+      * on a line with no backticks at all, the reference at the start of each part - which is how
+        such a line was always read.
+    """
+    # A long test name wraps, and the line ends inside its backticks. Closed here, the span is read
+    # up to the wrap - a prefix of the name, which is still what the source contains.
+    if rest.count("`") % 2:
+        rest += "`"
+    cut = _outside_backticks(rest, COMMENTARY)
+    head = _without_asides(rest if cut is None else rest[:cut])
+    backticked = "`" in rest
+    out = []
+    for index, piece in enumerate(_pieces(head)):
+        if backticked and "`" not in piece:
+            continue
+        # On a line that quotes its tests, a part is one reference only if it ends on a closing
+        # backtick. A repository written bare before a quoted test is one; a quoted test followed by
+        # the word "and", the sentence going on below, is a test and prose - not a repository called
+        # after the test, holding a test called "and".
+        pair = _one(piece) if not backticked or piece.endswith("`") else None
+        if pair is None and backticked:
+            for span in re.findall(r"`([^`]+)`", piece):
+                span = span.strip()
+                if index > 0 and PATH.match(span):
+                    continue
+                pair = _one(span)
+                if pair:
+                    break
+        elif pair is None:
+            m = REFERENCE.match(piece)
+            pair = m.groups() if m else None
+        if pair:
+            repo, test = pair
+            out.append({"repo": repo or "", "test": test, "needle": test_needle(test)})
+    return out
+
+
+def automated_lines(text):
+    """The `**Automated:**` lines of a document: (inside a scenario, outside any).
+
+    ONLY A LINE UNDER A `### Scenario:` HEADING IS AN AUTOMATED SCENARIO. A business rule may name
+    the test that holds it - a sensible thing to write - and counted, it made the column larger than
+    the scenarios it counts: 60 automated of 56, 107%. The scenario runs from its heading to the next
+    heading of level three or above; a heading inside a fenced block - a gherkin comment is a `#` -
+    is not one. The lines outside are returned so the table can name them instead of dropping them.
+    """
+    inside, outside = [], []
+    in_scenario = fenced = False
+    for line in text.split("\n"):
+        if FENCE.match(line):
+            fenced = not fenced
+        elif not fenced and SECTION.match(line):
+            in_scenario = bool(SCENARIO.match(line))
+        m = AUTOMATED.search(line)
+        if m:
+            (inside if in_scenario else outside).append(m.group(1).strip())
+    return inside, outside
+
 
 IGNORED_DIRS = {".git", ".hg", ".svn", "node_modules", "build", "dist", "out", "target",
                 "__pycache__", ".venv", "venv", ".tox", ".idea", ".gradle", ".next",
@@ -107,11 +264,17 @@ def collect(root):
                 continue
             with open(os.path.join(path, name), encoding="utf-8") as fh:
                 text = fh.read()
+            lines, stray = automated_lines(text)
             out.append({
                 "document": name[:-3],
                 "scenarios": SCENARIO.findall(text),
-                "automated": [{"repo": r, "test": tn, "needle": test_needle(tn)}
-                              for r, tn in AUTOMATED.findall(text)],
+                # TWO COUNTS, AND THEY ANSWER DIFFERENT QUESTIONS. `automated` is one per line - a
+                # scenario is automated or it is not, which is what the percentage means - and
+                # `references` is every test those lines name, which is what gets looked for.
+                # Folded together, a line naming two tests made the table read over 100%.
+                "automated": lines,
+                "references": [r for line in lines for r in references(line)],
+                "outside_scenarios": stray,
             })
     return out
 
@@ -147,7 +310,7 @@ def find_test(repo, name):
     everything found that document, reported the test as present, and went on reporting it as
     present after the test had been renamed away. The check answered a question about itself.
     """
-    if os.path.isdir(os.path.join(repo, ".git")):
+    if os.path.exists(os.path.join(repo, ".git")):     # a file, in a worktree
         try:
             hit = subprocess.run(["git", "grep", "-l", "-w", "-F", "-e", name,
                                   "--", ":(exclude)*.md"],
@@ -176,13 +339,20 @@ def find_test(repo, name):
 
 
 def verify(items, repos_root):
+    everything = [os.path.join(repos_root, n) for n in sorted(os.listdir(repos_root))
+                  if os.path.isdir(os.path.join(repos_root, n))]
     for item in items:
-        for a in item["automated"]:
+        for a in item["references"]:
             # No repository named means "somewhere in what was given", which is the normal case for
             # a project documented in its own repository.
-            candidates = ([os.path.join(repos_root, a["repo"])] if a["repo"]
-                          else [os.path.join(repos_root, n) for n in sorted(os.listdir(repos_root))
-                                if os.path.isdir(os.path.join(repos_root, n))])
+            #
+            # A repository named is looked for BESIDE THE OTHERS, AND AS A MODULE INSIDE EACH OF
+            # THEM. `server`, `e2e` and `feature/roaming-server-data` are modules of one checkout,
+            # and looked for only as siblings they resolved to nothing - eleven references of
+            # fourteen in one tree, every one of them silently not checked.
+            candidates = ([os.path.join(repos_root, a["repo"])]
+                          + [os.path.join(root, a["repo"]) for root in everything]
+                          if a["repo"] else everything)
             candidates = [c for c in candidates if os.path.isdir(c)]
             if not candidates:
                 a["found"] = None          # the repository is not here - nothing was checked
@@ -227,24 +397,42 @@ def main():
 
     total = sum(len(i["scenarios"]) for i in items)
     auto = sum(len(i["automated"]) for i in items)
-    missing = [(i["document"], a) for i in items for a in i["automated"]
+    missing = [(i["document"], a) for i in items for a in i["references"]
                if a.get("found") is False]
+    # NOT LOOKED FOR IS NOT A PASS. `found is None` means the repository or module named could not
+    # be located, so nothing was searched - and for as long as that was invisible, the reference read
+    # as covered. A named test nobody looks for is exactly the rot this report exists to catch.
+    unchecked = [(i["document"], a) for i in items for a in i["references"]
+                 if args.repos and a.get("found") is None]
+    # The same, one step earlier: a line in a scenario from which no reference could be read. It
+    # counts as automated - the author said so - but no test was looked for, and that is said too.
+    unread = [(i["document"], line) for i in items for line in i["automated"]
+              if args.repos and not references(line)]
 
     if args.json:
         print(json.dumps({
             "total": total, "automated": auto,
             "documents": items,
             "tests_not_found": [dict(document=d, **a) for d, a in missing],
+            "tests_not_looked_for": [dict(document=d, **a) for d, a in unchecked],
+            "lines_naming_no_readable_test": [dict(document=d, line=l) for d, l in unread],
         }, ensure_ascii=False, indent=2))
         return 1 if (missing and args.check) else 0
 
     print("{0:34}{1:>10}{2:>10}".format("document", "scenarios", "automated"))
     print("-" * 54)
+    # A document is shown if it has scenarios OR `**Automated:**` lines outside them. Skipping on
+    # scenarios alone hid the case that matters: headings that do not read `### Scenario:` parse as
+    # no scenarios, the row drops out, and its automated lines vanish with it. The row with a zero
+    # and the lines it could not count is what names the malformed file.
     for i in sorted(items, key=lambda x: -len(x["scenarios"])):
-        if not i["scenarios"]:
+        if not i["scenarios"] and not i["outside_scenarios"]:
             continue
-        print("{0:34}{1:>10}{2:>10}".format(i["document"], len(i["scenarios"]),
-                                            len(i["automated"])))
+        stray = len(i["outside_scenarios"])
+        print("{0:34}{1:>10}{2:>10}{3}".format(
+            i["document"], len(i["scenarios"]), len(i["automated"]),
+            "   <- {0} `**Automated:**` line(s) outside any `### Scenario:`, not counted"
+            .format(stray) if stray else ""))
     print("-" * 54)
     pct = auto * 100 // total if total else 0
     print("{0:34}{1:>10}{2:>10}   ({3}%)".format("TOTAL", total, auto, pct))
@@ -253,6 +441,16 @@ def main():
         print("\nA test is named that the repository does not contain:")
         for d, a in missing:
             print("  {0}: {1} {2}".format(d, a["repo"], a["test"]))
+    if unchecked:
+        print("\n{0} named test(s) were NOT looked for - the repository or module could not be "
+              "found under {1}, so nothing was searched:".format(len(unchecked), args.repos))
+        for d, a in unchecked:
+            print("  {0}: {1} {2}".format(d, a["repo"] or "(no repository named)", a["test"]))
+    if unread:
+        print("\n{0} `**Automated:**` line(s) in a scenario name no test this report can read "
+              "(SPEC 3.1), so nothing was looked for:".format(len(unread)))
+        for d, line in unread:
+            print("  {0}: {1}".format(d, line if len(line) <= 90 else line[:87] + "..."))
     if not args.repos:
         print("\nThe existence of the tests was NOT checked: --repos was not given. "
               "That is not the same as \"they are all there\".")

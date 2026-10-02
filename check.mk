@@ -71,9 +71,17 @@ endif
 # somebody else's repository rather than because of an edit here, and it cannot tell a live path
 # from one quoted as obsolete. ANCHORS_ARGS=--check makes the second one blocking once its list of
 # stale anchors has reached zero and the team decides to keep it there.
+#
+# NON-BLOCKING IS THE LEADING `-`, NOT THE COMMENT. `make check` is `gate report`, so a report line
+# that exits non-zero fails the check like a gate line does - and a report has more ways to fail than
+# its verdict: a fresh clone at the root of a container made `--repos ..` mean `/`, the kernel killed
+# the walk, and a repository whose documentation was entirely consistent went red. The `-` is taken
+# off the anchors line only when ANCHORS_ARGS asks for --check, which is a request to block.
+DOCS_ANCHORS_IGNORE = $(if $(filter --check,$(ANCHORS_ARGS)),,-)
+
 docs-report: docs-guard
-	$(PY) "$(DOCS_BOOTSTRAP_SCRIPTS)/bdd_report.py" --docs "$(DOCS)" --repos "$(REPOS)"
-	$(PY) "$(DOCS_BOOTSTRAP_SCRIPTS)/code_anchors.py" --docs "$(DOCS)" --repos "$(REPOS)" $(ANCHORS_ARGS)
+	-$(PY) "$(DOCS_BOOTSTRAP_SCRIPTS)/bdd_report.py" --docs "$(DOCS)" --repos "$(REPOS)"
+	$(DOCS_ANCHORS_IGNORE)$(PY) "$(DOCS_BOOTSTRAP_SCRIPTS)/code_anchors.py" --docs "$(DOCS)" --repos "$(REPOS)" $(ANCHORS_ARGS)
 
 # Regenerates the backlog index and appends the coverage-map lines that are missing. The
 # descriptions it writes are placeholders; finishing them is the author's.
