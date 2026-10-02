@@ -178,8 +178,8 @@ Written as a bare path, that line is reported rotten for ever, because no tree h
 this way it is reported as what it is. The left side has to name something a reader can fetch — a
 versioned file, a coordinate, or `owner/repo` — so the notation cannot be used to quiet an anchor
 that really has rotted. A repository is cited at the commit that was read, `owner/repo@<sha>` (or a
-version tag): an address at a branch, or at no ref, is listed as one at a ref that moves.
-[SPEC §4.1](SPEC.md).
+version tag): an address at a branch, or at no ref, is listed as one at a ref that moves — and so is
+a `-SNAPSHOT` coordinate, or a file with no version in its name (`x.jar`). [SPEC §4.1](SPEC.md).
 
 A document marked `status: deprecated` keeps its anchors as a record of where the behaviour was;
 the checker skips them and says so ([SPEC §4](SPEC.md)).
@@ -195,7 +195,9 @@ Write them against behaviour you have confirmed in the code: real status codes, 
 While the code does not exist, mark them *target*. A scenario covered by a test carries an
 `**Automated:**` line naming it — `**Automated:** catalog-api LoanRoutesTest` when several
 repositories are in play, or just the test when one is, in whatever form that project writes
-(`tests/test_store.py::test_name` and `LoanRoutesTest.a renewal is refused` are fine). Several
+(`tests/test_store.py::test_name` and `LoanRoutesTest.a renewal is refused` are fine). A check that
+is a script rather than a test is named by its path, `conformance/scripts/hashes.redis`, and the
+report looks for that file as it looks for an anchor. Several
 tests are a comma-separated list, each in its own backticks; after a dash or a semicolon the line is
 commentary. The line goes under the scenario it automates — the same line in a business rule is not
 counted. The absence of that line means the check is manual, and that asymmetry is worth seeing.
