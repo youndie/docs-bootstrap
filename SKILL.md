@@ -177,14 +177,17 @@ ktor-server-core-3.5.2.klib!/commonMain/io/ktor/server/engine/ShutdownHook.kt
 Written as a bare path, that line is reported rotten for ever, because no tree here holds it; written
 this way it is reported as what it is. The left side has to name something a reader can fetch — a
 versioned file, a coordinate, or `owner/repo` — so the notation cannot be used to quiet an anchor
-that really has rotted. [SPEC §4.1](SPEC.md).
+that really has rotted. A repository is cited at the commit that was read, `owner/repo@<sha>` (or a
+version tag): an address at a branch, or at no ref, is listed as one at a ref that moves.
+[SPEC §4.1](SPEC.md).
 
 A document marked `status: deprecated` keeps its anchors as a record of where the behaviour was;
 the checker skips them and says so ([SPEC §4](SPEC.md)).
 
 An anchor resolves in its own repository only — the one its first segment names, else its service's,
 else the one the documentation lives in — so a path into another repository starts with that
-repository's name, or is an address when the checker will not have a clone of it.
+repository's name, or is an address when the checker will not have a clone of it. `./x` is `x`; a
+path that climbs out with `../` is reported missing.
 
 ### 5. BDD scenarios are acceptance criteria
 

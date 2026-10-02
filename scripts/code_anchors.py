@@ -29,6 +29,12 @@ file or directory whose path ends with the fragment. Such a check can report a f
 files with the same name in different modules); a false "missing" it practically cannot produce.
 For the job at hand - catching rot - the bias is chosen deliberately.
 
+A leading `./` says "from the root" out loud and changes nothing: `./scripts/x.sh` is `scripts/x.sh`.
+Through 0.3.5 the `.` was read as a first segment, which names a repository, and no clone is called
+that - so a file that was plainly there was reported missing. A path that climbs out with `../` is
+none of the forms above: relative to the document or to the root, nothing says which, and either
+way it has left the anchor's own repository. It is reported missing, saying so.
+
 ADDRESSES INSIDE SOMETHING THIS TREE DOES NOT HOLD. Research verifies facts by unpacking a
 dependency's artefact and reading the source in it, and that address is not a path any search over
 sibling repositories can resolve - it can only ever be reported missing. Reported missing for ever,
@@ -46,6 +52,15 @@ THE LEFT SIDE MUST NAME SOMETHING FETCHABLE, and that constraint is what keeps t
 way to silence any anchor at all. A versioned file, a Maven coordinate, or `owner/repo` (optionally
 `@ref`) can be fetched by a reader who wants to check the claim; "Ktor" cannot. An address whose
 left side does not is reported as **missing**, saying so - a narrow escape hatch, deliberately.
+
+THE REF IS WHAT WAS READ. `owner/repo@<branch>` can be fetched, but not as it was: a branch moves,
+and one that lives only in somebody's local clone - `@worktree-local-only` - cannot be fetched at all.
+So the ref has to look like a commit (7 to 40 hex digits) or a version tag (`v1.31`, `4.3.1`,
+`7.6.0.RELEASE`); anything else, and no ref at all, is listed in a section of its own as an address
+at a ref that moves. Only the shape is read. Asking GitHub whether the ref exists would take the
+network and a token for every private repository on every run, and would still pass a branch, which
+exists and moves. The section is not rot and does not fail --check: addresses at a branch were
+legal through 0.3.5, and a report that turns red over a rule nobody was told about is read once.
 
 WHICH REPOSITORY. An anchor is looked for in its own repository and nowhere else: the one its first
 segment names (`konekt/server/...`, when a clone called konekt is under --repos); else the one the
@@ -101,8 +116,15 @@ FETCHABLE = re.compile(
     r"|^[\w.+-]+\.(jar|klib|aar|war|zip|whl|nupkg|gem|crate|apk|tgz)$"   # a packaged file
     r"|^[\w.+-]+\.tar\.gz$"
     r"|^[\w.+-]*-\d[\w.+-]*$"                                          # kotlin-native-2.4.10
-    r"|^[\w.-]+/[\w.-]+(@[\w.-]+)?$"                                   # owner/repo, optionally @ref
+    r"|^[\w.-]+/[\w.-]+(@[\w./-]+)?$"                                  # owner/repo, optionally @ref
 )
+
+# The ref of an `owner/repo@ref` address, and what a pinned one looks like - see the module docstring.
+# A coordinate and a packaged file carry their version in their own name; only this form names a ref.
+REPO_ADDRESS = re.compile(r"^[\w.-]+/[\w.-]+(?:@(.+))?$")
+PINNED_REF = re.compile(r"^[0-9a-fA-F]{7,40}$"                     # a commit
+                        r"|^[vV]?\d+(?:\.\d+)+(?:[.+-][\w.+-]*)?$"  # v1.31, 4.3.1, 7.6.0.RELEASE
+                        r"|^[vV]\d+$")                              # v2
 
 # Not everything with a slash in backticks is a path. What is obviously not one is filtered out,
 # otherwise the report drowns in noise: MIME types, slash-separated enumerations, host names.
@@ -362,6 +384,23 @@ def _within(anchor, found, trees):
                 lines[0], lines[1], found["repo"], found["at"], count)}
 
 
+def moving_ref(what):
+    """Why the ref of an `owner/repo@ref` address moves, or None when it is pinned or the address
+    names no repository. The shape only - see the module docstring."""
+    m = REPO_ADDRESS.match(what)
+    if not m:
+        return None
+    repo, ref = what.split("@", 1)[0], m.group(1)
+    if ref is None:
+        return ("no @ref, so the default branch, which moves - pin the commit that was read: "
+                "{0}@<sha>".format(repo))
+    if PINNED_REF.match(ref):
+        return None
+    return ("@{0} is not a commit or a version tag. A branch moves, so a reader does not fetch the "
+            "file that was read, and one that lives only in a local clone cannot be fetched at "
+            "all - pin the commit: {1}@<sha>".format(ref, repo))
+
+
 def resolve(anchor, trees, svc2repo, own="", single=False):
     """Looks the anchor up in the repository it belongs to.
 
@@ -379,13 +418,22 @@ def resolve(anchor, trees, svc2repo, own="", single=False):
         # No tree here holds it, and that is the point of the notation rather than a gap in it. What
         # IS checked is that the left side names something a reader can fetch - see FETCHABLE.
         if FETCHABLE.match(what):
+            moves = moving_ref(what)
+            if moves:
+                return {"status": "unpinned", "what": what, "why": moves}
             return {"status": "external", "what": what}
         return {"status": "missing",
                 "why": "'{0}' does not name a fetchable artefact or repository - use a versioned "
-                       "file, a coordinate, or owner/repo".format(what)}
+                       "file, a coordinate, or owner/repo@<sha>".format(what)}
     raw = anchor["path"]
     is_dir = raw.endswith("/")     # remember BEFORE trimming: below there is no slash any more
     p = raw.rstrip("/")
+    # `./x` is `x` - see the module docstring. Dots with nothing after them are prose ("the depth of
+    # `../`"), not a path.
+    while p.startswith("./"):
+        p = p[2:]
+    if p in ("", ".", ".."):
+        return {"status": "skipped", "why": "not a path into the code"}
     if WILDCARD.search(p):
         return {"status": "skipped", "why": "a pattern, not a path"}
     if NOT_A_PATH.match(p):
@@ -396,6 +444,14 @@ def resolve(anchor, trees, svc2repo, own="", single=False):
     # explain why they need no fixing.
     if not (re.search(r"\.[A-Za-z0-9]{1,6}(/|$)", p) or is_dir or STRUCTURAL.search(p)):
         return {"status": "skipped", "why": "looks like a class name, not a path"}
+    # Out of the repository - see the module docstring. After the shape test, so that `../gradlew`
+    # in a sentence about running it stays a command rather than becoming rot.
+    if p.startswith("../"):
+        return {"status": "missing",
+                "why": "climbs out with `../`: relative to the document or to the root, nothing says "
+                       "which, and either way it leaves the anchor's repository - write it from the "
+                       "repository root, start it with the other repository's name, or write it as "
+                       "an address (SPEC 4.1)"}
 
     # The repository the anchor names, if its first segment is the name of one of the trees:
     # `konekt/server/.../Application.kt` lives in konekt and nowhere else.
@@ -553,18 +609,22 @@ def main():
     skipped = [a for a in anchors if a["status"] == "skipped"]
     found = [a for a in anchors if a["status"] == "found"]
     external = [a for a in anchors if a["status"] == "external"]
+    unpinned = [a for a in anchors if a["status"] == "unpinned"]
 
+    # --check asks about rot, and an address at a moving ref is not rot - see the module docstring.
     if args.json:
         print(json.dumps({"total": len(anchors), "found": len(found),
                           "missing": len(missing), "skipped": len(skipped),
-                          "external": len(external), "deprecated_documents": deprecated,
+                          "external": len(external), "unpinned": len(unpinned),
+                          "deprecated_documents": deprecated,
                           "repos": sorted(trees), "anchors": anchors},
                          ensure_ascii=False, indent=2))
         return 1 if (missing and args.check) else 0
 
     print("Repositories: {0}".format(", ".join(sorted(trees))))
-    print("Anchors: {0} - found {1}, not found {2}, inside artefacts {3}, skipped {4}\n"
-          .format(len(anchors), len(found), len(missing), len(external), len(skipped)))
+    print("Anchors: {0} - found {1}, not found {2}, inside artefacts {3}, at a ref that moves {4}, "
+          "skipped {5}\n".format(len(anchors), len(found), len(missing), len(external),
+                                 len(unpinned), len(skipped)))
 
     if missing:
         by_doc = {}
@@ -599,6 +659,21 @@ def main():
             for a in by_doc[doc]:
                 print("      {0}".format(a["path"]))
         print()
+    if unpinned:
+        by_doc = {}
+        for a in unpinned:
+            by_doc.setdefault(a["doc"], []).append(a)
+        print("AT A REF THAT MOVES")
+        print("-" * 72)
+        print("  An address names what was read: a commit, or a version tag. These name a branch, or")
+        print("  no ref at all, so what a reader fetches is not what was read. Not rot, and they do")
+        print("  not fail --check - but each is a claim nobody can check as it was made.")
+        for doc in sorted(by_doc):
+            print("  {0}".format(doc))
+            for a in by_doc[doc]:
+                print("      {0}".format(a["path"]))
+                print("          {0}".format(a["why"]))
+        print()
     if skipped:
         print("Skipped as patterns: {0}\n"
               .format(", ".join(sorted({a["path"] for a in skipped}))))
@@ -610,7 +685,11 @@ def main():
         print("Rotten anchors: {0}. A path in another repository gets renamed without anyone "
               "looking into the documentation.".format(len(missing)))
         return 1 if args.check else 0
-    print("Every anchor resolves")
+    if unpinned:
+        print("Every anchor resolves; {0} address(es) at a ref that moves, listed above."
+              .format(len(unpinned)))
+    else:
+        print("Every anchor resolves")
     return 0
 
 
