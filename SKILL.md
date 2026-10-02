@@ -196,8 +196,9 @@ While the code does not exist, mark them *target*. A scenario covered by a test 
 `**Automated:**` line naming it — `**Automated:** catalog-api LoanRoutesTest` when several
 repositories are in play, or just the test when one is, in whatever form that project writes
 (`tests/test_store.py::test_name` and `LoanRoutesTest.a renewal is refused` are fine). A check that
-is a script rather than a test is named by its path, `conformance/scripts/hashes.redis`, and the
-report looks for that file as it looks for an anchor. Several
+is a script rather than a test is named by its path, `conformance/scripts/hashes.redis`, or by its
+file name alone, `negative-control.sh`, and the report looks for that file as it looks for an anchor.
+Several
 tests are a comma-separated list, each in its own backticks; after a dash or a semicolon the line is
 commentary. The line goes under the scenario it automates — the same line in a business rule is not
 counted. The absence of that line means the check is manual, and that asymmetry is worth seeing.

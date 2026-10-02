@@ -35,6 +35,19 @@ resolves an anchor (SPEC 4): `./x` is `x`, `../` leaves the repository, `.../x` 
 suffix fits, a cited line range has to be inside the file, and the file has to be in its own
 repository. A path the anchors check would skip as not looking like one - `samples/oracle`, with no
 extension and no source-tree segment - is still searched for as text, as before.
+
+A FILE NAME WITH NO DIRECTORY IS A FILE TOO. `negative-control.sh` and `LoanRoutesTest.kt` name files
+as surely as `samples/oracle/negative-control.sh` does, and through 0.3.7 they were searched for as
+text: in a git checkout as the whole string, which a script nobody else mentions does not contain;
+in a walked directory as what followed the last dot, so `kafka-consumer-groups.sh` became `sh` and
+was "found" in the first file holding those two letters. Such a name is now looked for as a file of
+that name in its repository (SPEC 3.1, 4). It is told from `TestClass.member` by its extension -
+one of FILE_EXTENSIONS - so `LoanTest.renew` stays a class and its member however short the
+member's name is.
+
+THE SAME QUESTION WITH OR WITHOUT GIT. A name is looked for as `git grep -w -F` looks for it - the
+whole name, as a word, in a file that is not markdown - in a git checkout and in a directory that is
+walked alike, and a walk under `--repos .` does not start in `.git` or in a build directory.
 """
 import argparse
 import json
@@ -93,7 +106,26 @@ WHOLE = re.compile(_LEAD + _TEST + r"`?$")                # a text that is one a
 LOCATOR = re.compile(_LEAD + _LOCATOR + r"`?$")
 # `TestClass.member`: the member is the needle. `FooTest.kt` is a file, not a member called `kt`.
 MEMBER = re.compile(r"^[A-Z][A-Za-z0-9_]*\.(.+)$")
-FILE_NAME = re.compile(r"^\S+\.[a-z0-9]{1,5}$")
+# A FILE NAME with no directory, and optionally a line or a range: `negative-control.sh`,
+# `LoanRoutesTest.kt:40-52`. What makes it a file and not `TestClass.member` is the extension, and
+# only one from this list counts: a check written as "any short lowercase tail" took
+# `LoanTest.renew` for a file and grepped for the whole string, which no source contains. The list
+# is what a test, a script or a check's data is called, and it is narrow on purpose: an extension a
+# member is plausibly named (`json`, `patch`, `html`, `env`, `h`) is left out. The two mistakes do not
+# cost the same - a member read as a file is reported missing, while a file read as a name is
+# searched for as text, which is what happened to every file name through 0.3.7. `.md` is not on
+# it either: a document is never a test (see find_test).
+FILE_EXTENSIONS = frozenset("""
+    kt kts java scala groovy gradle clj cljs cljc
+    py pyi rb php pl lua tcl jl ex exs erl hs ml dart nim zig cs vb
+    go rs c cc cpp cxx mm swift
+    js mjs cjs ts mts cts jsx tsx vue svelte
+    sh bash zsh fish ksh ps1 psm1 bat bats
+    sql redis cql cypher feature robot jmx
+    yaml yml toml jsonl ndjson txt csv tsv
+    mk cmake bzl
+""".split())
+BARE_FILE = re.compile(r"^([^\s:#/`]+\.([A-Za-z0-9]+))(?::(\d+)(?:-(\d+))?)?$")
 # A path to a file or a directory, with no `::` or `#`: next to a reference, where it lives or what
 # it produced - `test_renewal_limit_reached` in `tests/test_loan_rules.py`, a report in
 # `bench/reports/b-16/`. Not a test.
@@ -121,9 +153,28 @@ def test_needle(reference):
         if separator in reference:
             return reference.rsplit(separator, 1)[-1].strip()
     member = MEMBER.match(reference)
-    if member and not FILE_NAME.match(reference):
+    if member and not bare_file(reference):
         return member.group(1).strip()
     return reference.strip()
+
+
+def bare_file(reference):
+    """The BARE_FILE match if the reference is a file name with no directory, else None."""
+    m = BARE_FILE.match(reference)
+    return m if m and m.group(2).lower() in FILE_EXTENSIONS else None
+
+
+def file_of(reference):
+    """(path, first line, last line, bare) if the reference names a file, else None. One reading for
+    both shapes, so that what is a file and what is a name is decided once, before anything is looked
+    for - and the same whether the repository is a git checkout or is walked."""
+    m = PATH_REFERENCE.match(reference)
+    if m:
+        return m.group(1), m.group(2), m.group(3), False
+    m = bare_file(reference)
+    if m:
+        return m.group(1), m.group(3), m.group(4), True
+    return None
 
 
 def _outside_backticks(text, pattern):
@@ -192,7 +243,7 @@ def references(rest):
         a span, the first span that is one reference - `PurchaseSagaTest`, and against a moved clock
         `SuspendedSagaExpiryTest` is two tests. A quotation is not one (`a purchase that is
         confirmed completes` is longer than a reference), and after the first part neither is a bare
-        path, which says where a test lives;
+        path or a file name, which says where a test lives or what it reads;
       * on a line with no backticks at all, the reference at the start of each part - which is how
         such a line was always read.
     """
@@ -215,7 +266,10 @@ def references(rest):
         if pair is None and backticked:
             for span in re.findall(r"`([^`]+)`", piece):
                 span = span.strip()
-                if index > 0 and PATH.match(span):
+                # A file name is a path with its directory left out, and in prose it says the same
+                # thing: `ForeignCommitTest`, read against `kafka-consumer-groups.sh` - a tool the
+                # test reads, not a second test.
+                if index > 0 and (PATH.match(span) or bare_file(span)):
                     continue
                 pair = _one(span)
                 if pair:
@@ -226,7 +280,7 @@ def references(rest):
         if pair:
             repo, test = pair
             ref = {"repo": repo or "", "test": test, "needle": test_needle(test)}
-            if PATH_REFERENCE.match(test):
+            if file_of(test):
                 ref["path"] = True
             out.append(ref)
     return out
@@ -302,13 +356,19 @@ def collect(root):
     return out
 
 
-def _contains(path, needle):
-    """Is the name written anywhere in this file? Text only, and small files only."""
+def _word(name):
+    """The name as `git grep -w -F` matches it: the whole string, with no letter, digit or underscore
+    on either side. Without the boundary a walk found `Loan` in `LoanTest`, which git does not."""
+    return re.compile(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])")
+
+
+def _contains(path, word):
+    """Is the name written anywhere in this file, as a word? Text only, and small files only."""
     try:
         if os.path.getsize(path) > MAX_GREP_BYTES:
             return False
         with open(path, encoding="utf-8", errors="ignore") as fh:
-            return needle in fh.read()
+            return word.search(fh.read()) is not None
     except OSError:
         return False
 
@@ -327,6 +387,12 @@ def find_test(repo, name):
     file name alone would do exactly that for every test function that does not have a file to
     itself.
 
+    THE SAME QUESTION MEANS THE SAME NEEDLE AND THE SAME MATCH. Through 0.3.7 the walk looked for what
+    followed the last dot of the name, as a substring, and took a file named after it as the test:
+    `kafka-consumer-groups.sh` was "found" as `sh`, `Loan` inside `LoanTest`, and a test renamed away
+    in a file that kept its name - none of which `git grep -w` finds. Both now look for the whole
+    name as a word. A name that is a file is not looked for here at all (see _check_file).
+
     MARKDOWN IS NEVER A TEST, and excluding it is what makes this check able to fail at all. When a
     project keeps its documentation in the same repository as its code - the layout this format
     recommends first - the name of the test occurs in the very document that names it. Searching
@@ -343,44 +409,73 @@ def find_test(repo, name):
         out = hit.stdout.strip()
         return (True, out.split("\n")[0]) if out else (False, None)
 
-    # Not a git checkout: walk it. A file named after the test wins - a test class usually lives in
-    # one - and otherwise the first file whose text mentions the name is reported.
-    stem = name.split(".")[-1]
-    inside = None
+    # Not a git checkout: walk it, and report the first file whose text has the name as a word.
+    word = _word(name)
     for base, dirs, files in os.walk(repo):
-        dirs[:] = [d for d in dirs if d not in IGNORED_DIRS and not d.startswith(".")]
+        dirs[:] = sorted(d for d in dirs if d not in IGNORED_DIRS and not d.startswith("."))
         for f in sorted(files):
             if f.endswith(".md"):
                 continue                   # see the docstring: a document is not evidence
             full = os.path.join(base, f)
-            rel = os.path.relpath(full, repo).replace(os.sep, "/")
-            if os.path.splitext(f)[0] == stem:
-                return True, rel
-            if inside is None and _contains(full, stem):
-                inside = rel
-    return (True, inside) if inside else (False, None)
+            if _contains(full, word):
+                return True, os.path.relpath(full, repo).replace(os.sep, "/")
+    return False, None
 
 
-def _check_file(a, trees):
+def _by_name(anchor, name, dirs, trees):
+    """A file name with a repository or module before it: a file of that name anywhere inside it.
+
+    `dirs` are the directories the repository token names (see verify), each mapped onto the tree
+    that holds it, so a git checkout is read through `git ls-files` here as it is for an anchor.
+    None when no tree holds any of them - then nothing was looked in."""
+    held = False
+    for d in dirs:
+        real = os.path.realpath(d)
+        for repo, tree in sorted(trees.items()):
+            root = os.path.realpath(tree["root"])
+            if real == root:
+                prefix = ""
+            elif real.startswith(root + os.sep):
+                prefix = os.path.relpath(real, root).replace(os.sep, "/") + "/"
+            else:
+                continue
+            held = True
+            at = sorted(f for f in tree["files"]
+                        if f.startswith(prefix) and f.rsplit("/", 1)[-1] == name)
+            if at:
+                return code_anchors._within(
+                    anchor, {"status": "found", "repo": repo, "at": at[0], "exact": False}, trees)
+    return code_anchors._missing(name, trees) if held else None
+
+
+def _check_file(a, trees, dirs):
     """A reference that is a path, resolved as an anchor is (SPEC 4) - see the module docstring.
 
     `trees` is code_anchors.context(). With a repository or module named, the path is inside it,
-    which is how an anchor writes the same file. Returns False, and leaves the reference alone, when
-    the anchors check would skip the path as not looking like one: then it is searched for as text,
-    as every reference was through 0.3.6."""
-    m = PATH_REFERENCE.match(a["test"])
-    path = m.group(1)
-    if a["repo"]:
+    which is how an anchor writes the same file; a bare file name is then anywhere inside it, which
+    `dirs` - the directories that token names - say. Returns False, and leaves the reference alone,
+    when the anchors check would skip the path as not looking like one: then it is searched for as
+    text, as every reference was through 0.3.6."""
+    path, first, last, bare = file_of(a["test"])
+    if a["repo"] and not bare:
         while path.startswith("./"):
             path = path[2:]
         path = a["repo"].rstrip("/") + "/" + path
     anchor = {"path": path, "shortened": False, "service_hint": ""}
-    if m.group(2):
-        anchor["lines"] = [int(m.group(2)), int(m.group(3) or m.group(2))]
+    if first:
+        anchor["lines"] = [int(first), int(last or first)]
     if not trees[0]:
         a["found"] = None              # nothing under --repos to look in
         return True
-    res = code_anchors.resolve(anchor, *trees)
+    if bare and a["repo"]:
+        res = _by_name(anchor, path, dirs, trees[0])
+        if res is None:
+            a["found"] = None
+            return True
+    else:
+        # With no repository named, a bare name is the shortest suffix there is: a file of that name
+        # in the reference's own repository, by the rule an anchor is found by.
+        res = code_anchors.resolve(anchor, *trees)
     if res["status"] == "skipped":
         a.pop("path", None)
         return False
@@ -397,8 +492,11 @@ def _check_file(a, trees):
 
 
 def verify(items, repos_root, docs_root):
+    # The trees are what code_anchors takes for trees. Under `--repos .` every subdirectory was one,
+    # `.git` included, and walked raw: its index lists every tracked path and its logs every commit
+    # subject, so a name was "found" there long after the code had dropped it.
     everything = [os.path.join(repos_root, n) for n in sorted(os.listdir(repos_root))
-                  if os.path.isdir(os.path.join(repos_root, n))]
+                  if os.path.isdir(os.path.join(repos_root, n)) and code_anchors.is_tree(n)]
     trees = None                       # loaded for the first reference that is a path
     for item in items:
         for a in item["references"]:
@@ -419,7 +517,7 @@ def verify(items, repos_root, docs_root):
             if a.get("path"):
                 if trees is None:
                     trees = code_anchors.context(docs_root, repos_root)
-                if _check_file(a, trees):
+                if _check_file(a, trees, candidates):
                     continue
             a["found"], a["at"] = False, ""
             for candidate in candidates:

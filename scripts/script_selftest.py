@@ -942,6 +942,86 @@ A scenario with an `**Automated:**` line names its test; this sentence is about 
         expect_true("bdd_report --repos . did not check a path for the file",
                     found == [("ci/b-09/run.sh", True), ("ci/b-99/run.sh", False)], out)
 
+    # A FILE NAME WITH NO DIRECTORY IS A FILE, AND A NAME IS ONE NAME, WITH GIT OR WITHOUT IT. Through
+    # 0.3.7 a git checkout grepped `negative-control.sh` as text (a script nobody mentions: missing;
+    # a deleted one a Makefile still mentions: found) while a walked tree looked for what followed the
+    # last dot - `kafka-consumer-groups.sh` was found as `sh` - as a substring (`Loan` in `LoanTest`),
+    # took a file named after a test for the test, and under `--repos .` walked `.git`, whose logs
+    # hold a commit subject naming a test long gone. One tree, read both ways, has to give one answer.
+    with tempfile.TemporaryDirectory() as root:
+        own = os.path.join(root, "own")
+        write(own, "samples/oracle/negative-control.sh", "#!/bin/sh\nexit 1\n")
+        write(own, "src/LoanTest.kt", "class LoanTest {\n    fun renew() {}\n}\n")
+        write(own, "src/RenamedTest.kt", "class Other\n")
+        write(own, "samples/Makefile", "# GoneTest.kt was folded into LoanTest\n")
+        wanted = {
+            "negative-control.sh": True, "LoanTest.kt": True, "LoanTest.kt:2-3": True,
+            "LoanTest": True, "LoanTest.renew": True,
+            "kafka-consumer-groups.sh": False, "GoneTest.kt": False, "LoanTest.kt:40-52": False,
+            "Loan": False, "RenamedTest": False, "StaleTest": False, "billing.renew": False,
+        }
+        body = "\n## 5. Scenarios\n" + "".join(
+            "\n### Scenario: {0}\n* **Automated:** `{1}`\n".format(i, ref)
+            for i, ref in enumerate(wanted))
+        body += ("\n### Scenario: prose\n* **Automated:** `LoanTest`, read against "
+                 "`kafka-consumer-groups.sh` by `samples/oracle/negative-control.sh`\n")
+        write(own, "docs/features/feature-x.md", doc("active", "src/LoanTest.kt", body))
+        git(own, "init", "-q")
+        git(own, "add", "-A")
+        git(own, "commit", "-q", "-m", "drop StaleTest")
+        for mode, repos in (("a git checkout", root), ("a walked tree (--repos .)", ".")):
+            report, out = bdd(own, repos)
+            refs = [r for d in (report or {}).get("documents", []) for r in d.get("references", [])]
+            found = dict((r["test"], r.get("found")) for r in refs[:len(wanted)])
+            expect_true("bdd_report in {0} did not answer for each name as `git grep -w` and for each "
+                        "file name as a file: {1}".format(mode, sorted(
+                            (ref, found.get(ref), want) for ref, want in wanted.items()
+                            if found.get(ref) != want)), found == wanted, out)
+            files = sorted(r["test"] for r in refs[:len(wanted)] if r.get("path"))
+            expect_true("bdd_report in {0} did not take exactly the file names for files, or took "
+                        "`LoanTest.renew` for one".format(mode),
+                        files == ["GoneTest.kt", "LoanTest.kt", "LoanTest.kt:2-3", "LoanTest.kt:40-52",
+                                  "kafka-consumer-groups.sh", "negative-control.sh"], out)
+            needle = dict((r["test"], r["needle"]) for r in refs)
+            expect_true("bdd_report in {0} looked for `LoanTest.renew` by another needle than "
+                        "`renew`".format(mode), needle.get("LoanTest.renew") == "renew", out)
+            expect_true("bdd_report in {0} read a file name in prose after the first test as a "
+                        "second test".format(mode),
+                        [r["test"] for r in refs[len(wanted):]] == ["LoanTest"], out)
+
+    # A file name after a repository or a module is a file of that name inside it - not at its root,
+    # and not in a sibling. Without one, it is in the documentation's own repository (SPEC 4).
+    with tempfile.TemporaryDirectory() as root:
+        repos = os.path.join(root, "repos")
+        own, other = os.path.join(repos, "own"), os.path.join(repos, "other")
+        write(own, "samples/oracle/negative-control.sh", "exit 1\n")
+        write(own, "src/LoanTest.kt", "class LoanTest\n")
+        write(other, "scripts/only-other.sh", "exit 0\n")
+        wanted = {
+            "own negative-control.sh": True, "samples negative-control.sh": True,
+            "other only-other.sh": True,
+            "samples LoanTest.kt": False, "other negative-control.sh": False,
+            "only-other.sh": False, "own LoanTest.kt:40-52": False,
+        }
+        body = "\n## 5. Scenarios\n" + "".join(
+            "\n### Scenario: {0}\n* **Automated:** `{1}`\n".format(i, ref)
+            for i, ref in enumerate(wanted))
+        write(own, "docs/features/feature-x.md", doc("active", "src/LoanTest.kt", body))
+        for repo in (own, other):
+            git(repo, "init", "-q")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-q", "-m", "base")
+        report, out = bdd(own, repos)
+        refs = dict((" ".join(x for x in (r["repo"], r["test"]) if x), r)
+                    for d in (report or {}).get("documents", []) for r in d.get("references", []))
+        found = dict((ref, refs.get(ref, {}).get("found")) for ref in wanted)
+        expect_true("bdd_report did not look for a file name inside the repository or module named "
+                    "before it, or in its own repository when none is: {0}".format(sorted(
+                        (ref, found[ref], want) for ref, want in wanted.items() if found[ref] != want)),
+                    found == wanted, out)
+        expect_true("bdd_report did not say where a file name it could not find in its module is",
+                    "own/src/LoanTest.kt" in refs.get("samples LoanTest.kt", {}).get("why", ""), out)
+
     if failures:
         sys.stderr.write("\n\n".join(failures) + "\n")
         return 1
@@ -954,7 +1034,8 @@ A scenario with an `**Automated:**` line names its test; this sentence is about 
           "the root and `../` as leaving it, addresses at a branch or at no ref, snapshots, dynamic "
           "versions and unversioned files told from pinned ones without failing --check, a "
           "renamed item told from a stolen number, `**Automated:**` lines read as lists and "
-          "counted only in scenarios, a line naming a file checked for the file, and no guard "
+          "counted only in scenarios, a line naming a file - by its path or by its name alone - checked "
+          "for the file, a test name looked for the same way with git and without, and no guard "
           "fires on the shape it allows")
     return 0
 

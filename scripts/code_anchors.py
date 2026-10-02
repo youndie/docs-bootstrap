@@ -272,6 +272,18 @@ def _walked_tree(path):
     return {"files": files, "dirs": _dirs_of(files)}
 
 
+def is_tree(name):
+    """Can a subdirectory of --repos called this be a tree to look in? bdd_report.py asks the same.
+
+    Build and tooling directories are not. Dot-directories are not repositories either - `.git`,
+    `.gradle`, `.idea` hold no code to resolve anchors against - with one exception. When `--repos .`
+    makes this repository's own subdirectories the trees, `.github` is one of them, and
+    `.github/workflows/check.yaml` is a path documents legitimately cite. Skipped, an anchor at a
+    file that plainly exists was reported rotten for ever - while the walk inside a tree kept
+    `.github` all along."""
+    return name not in IGNORED_DIRS and (not name.startswith(".") or name == ".github")
+
+
 def load_trees(repos_root, skip=()):
     """Repository name -> the set of file and directory paths inside it.
 
@@ -286,14 +298,7 @@ def load_trees(repos_root, skip=()):
     skip = {os.path.realpath(p) for p in skip}
     for name in sorted(os.listdir(repos_root)):
         path = os.path.join(repos_root, name)
-        if not os.path.isdir(path) or name in IGNORED_DIRS:
-            continue
-        # Dot-directories are not repositories - `.git`, `.gradle`, `.idea` hold no code to resolve
-        # anchors against - with one exception. When `--repos .` makes this repository's own
-        # subdirectories the trees, `.github` is one of them, and `.github/workflows/check.yaml` is
-        # a path documents legitimately cite. Skipped, an anchor at a file that plainly exists was
-        # reported rotten for ever - while the walk below, inside a tree, kept `.github` all along.
-        if name.startswith(".") and name != ".github":
+        if not os.path.isdir(path) or not is_tree(name):
             continue
         if os.path.realpath(path) in skip:
             continue
