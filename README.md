@@ -105,7 +105,7 @@ faith.
 
 | Script | Guards | In CI |
 |---|---|---|
-| `docs_check.py` | link graph across the layers, `id` = filename, required fields, `status` vocabulary, at least one path into the code, a screen's `design.states` naming states the document lists; **warns** about scenarios no tool can count — a gherkin block with no `### Scenario:` heading of its own is reported as 0 everywhere else | blocking |
+| `docs_check.py` | link graph across the layers, `id` = filename, required fields, `status` vocabulary, at least one path into the code (an address, SPEC §4.1, counts as one), a screen's `design.states` naming states the document lists; **warns** about scenarios no tool can count — a gherkin block with no `### Scenario:` heading of its own is reported as 0 everywhere else | blocking |
 | `coverage_map.py` | the map in `docs/README.md` matches the files on disk | blocking |
 | `backlog_index.py` | the generated index matches the items; no duplicate numbers or slugs; `blocked_by` resolves; **under `--check`, that the items are there at all** — a backlog lost to a merge used to exit 0 (`--allow-missing` for a project without its first item yet) | blocking |
 | `plugin_check.py` | the skill's name in `SKILL.md`, `plugin.json` and `marketplace.json` is one name, and every declared skill directory holds a `SKILL.md`; the tag `templates/workflow-check.yaml` pins is that version; **on a pull request, that a change to anything the plugin ships raises `version` above the base branch's** — otherwise `claude plugin update` never sees it | blocking |

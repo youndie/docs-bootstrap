@@ -32,7 +32,10 @@ WHAT IS DELIBERATELY NOT CHECKED: the section structure. Documents legitimately 
 template - a feature that is mostly a reality check has no business-rules section, and that is a
 style, not a defect. Checking headings would catch style. What is checked instead is the substance
 of the rule the format exists for: a reader must reach the code in one hop, so every document must
-carry at least one path that looks like a path into a code tree.
+carry at least one path that looks like a path into a code tree - or an address (SPEC 4.1) into a
+tree the documented repository does not hold, such as `owner/repo@<sha>!/path`, whose left side
+names something a reader can fetch. Whether the address is pinned is not asked here: code_anchors.py
+lists the ones at a ref that moves, and that list does not block.
 """
 import argparse
 import json
@@ -88,6 +91,40 @@ CODE_ANCHOR = re.compile(
     r"|`[A-Za-z0-9_]+\.(?:py|js|ts|tsx|jsx|go|rs|rb|java|kt|kts|cs|php|swift"
     r"|sql|sh|yaml|yml|toml|json|tf)(?::\d+(?:-\d+)?)?`"
 )
+
+# An address (SPEC 4.1) is a path into the code too: `owner/repo@<sha>!/src/x.kt`,
+# `<group>:<artifact>:<version>!/x.kt`, `ktor-server-core-3.5.2.klib!/x.kt`. CODE_ANCHOR cannot see
+# one - `@`, `:` and `!` are outside its character classes - so a document whose code lives entirely
+# in another repository failed with no-code-anchor the moment its paths were written the way SPEC 4
+# tells it to write them, and the only way through was to add a path of the documented repository's
+# own that the document did not need.
+#
+# The left side must name something fetchable, as in code_anchors.py: an address nobody can obtain
+# (`Ktor!/...`, a placeholder like `<artefact>!/...`) is not a way into the code, and counting it
+# would make the notation the escape hatch SPEC 4.1 says it must not be. The two patterns are kept
+# identical - script_selftest.py compares them, since each script stays runnable on its own.
+#
+# The ref is NOT asked about here. An address at a branch or at no ref still names the code in one
+# hop; whether it names the code that was read is code_anchors.py's question, which it answers in a
+# section of its own that deliberately does not fail --check. Refusing it here would make that
+# section blocking after all, through another script, and give one question two owners that
+# disagree.
+ADDRESS = re.compile(r"`([^`\s!]+)!/([^`]+)`")
+FETCHABLE = re.compile(
+    r"^[\w.-]+:[\w.-]+:[\w.+-]+$"                                      # a Maven/Gradle coordinate
+    r"|^[\w.+-]+\.(jar|klib|aar|war|zip|whl|nupkg|gem|crate|apk|tgz)$"   # a packaged file
+    r"|^[\w.+-]+\.tar\.gz$"
+    r"|^[\w.+-]*-\d[\w.+-]*$"                                          # kotlin-native-2.4.10
+    r"|^[\w.-]+/[\w.-]+(@[\w./-]+)?$"                                  # owner/repo, optionally @ref
+)
+
+
+def has_code_anchor(text):
+    """Whether the document carries at least one path into the code: a path, a file name, or an
+    address whose left side can be fetched."""
+    return bool(CODE_ANCHOR.search(text)) or any(
+        FETCHABLE.match(what) for what, _ in ADDRESS.findall(text))
+
 
 ALLOWED_STATUS = {"draft", "active", "deprecated"}
 
@@ -398,9 +435,14 @@ def check(docs, root, hub, on_main=False):
                           "{0} counted here; {1} (SPEC 3.1)"
                           .format(len(SCENARIO.findall(d["text"])), "; ".join(uncounted))))
 
-        if not CODE_ANCHOR.search(d["text"]):
+        if not has_code_anchor(d["text"]):
             msg = ("not a single path into the code - the implementation cannot be "
                    "reached from this document in one hop")
+            unfetchable = sorted({what for what, _ in ADDRESS.findall(d["text"])})
+            if unfetchable:
+                msg += ("; {0} does not name a fetchable artefact or repository - use a versioned "
+                        "file, a coordinate, or owner/repo@<sha> (SPEC 4.1)"
+                        .format(", ".join("'{0}'".format(w) for w in unfetchable)))
             if d["layer"] in ANCHOR_OPTIONAL:
                 warns.append((path, "no-code-anchor",
                               msg + " (research may predate the code; cite the artefact you "
