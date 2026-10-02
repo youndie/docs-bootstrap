@@ -458,6 +458,8 @@ def main():
     lines = """
 ## 2. Business rules
 
+A scenario with an `**Automated:**` line names its test; this sentence is about the line.
+
 * A rule a test holds. **Automated:** `RuleTest`
 
 ## 5. Scenarios
@@ -487,6 +489,10 @@ def main():
                     for d in report["documents"] for r in d.get("references", [])]
             expect_true("bdd_report counted an `**Automated:**` line outside any scenario "
                         "(wanted 3 of 3)", report["automated"] == 3 and report["total"] == 3, out)
+            stray = [l for d in report["documents"] for l in d.get("outside_scenarios", [])]
+            expect_true("bdd_report took the marker quoted in prose for an `**Automated:**` line "
+                        "(wanted the business rule's line alone outside the scenarios)",
+                        stray == ["`RuleTest`"], out)
             expect_true("bdd_report did not read both tests of a comma-separated line, a module "
                         "path as their repository, or found neither",
                         refs[:2] == [("e2e", "ScenarioTest", "ScenarioTest", True),
