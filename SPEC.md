@@ -127,6 +127,19 @@ so a tool looking for the test greps for what follows the separator — the file
 the function keeps its name — and that name may contain spaces, as Kotlin and Spock test names do.
 Backticks around either part are optional.
 
+A check that is not a test function — a conformance script, a `run.sh` that drives the binary, the
+`Main.kt` of a harness — is named by its path, with nothing after `::` or `#`:
+
+```markdown
+**Automated:** `conformance/scripts/hashes/encoding.redis`
+```
+
+Such a reference is checked for the file, not looked for as text: it resolves the way a code anchor
+does (§4) — in its own repository, `./` from the root, `.../` abbreviated, `../` out of it, a cited
+range inside the file — and a repository written before it means the path is inside that one. A
+path with no extension, which the anchor check would not take for one (`samples/oracle`), is looked
+for as text, like a test name.
+
 A scenario covered by several tests names them as a list, separated by commas, each reference in
 its own backticks. A dash or a semicolon ends the list, and what follows it is commentary for the
 reader; so is anything in parentheses.
@@ -442,6 +455,16 @@ not fail `--check`. Whether the ref exists is not asked: that would take the net
 every private repository, on every run, and a branch would still pass it, because a branch exists.
 The shape is all the check can hold, and it has blind spots a reader should know: a branch named
 like a version (`7.2`) passes, and so does a sha that was never pushed.
+
+**So does the version.** A coordinate and a packaged file carry their version in their own name, and
+a version published again under the same name moves like a branch: a `-SNAPSHOT` coordinate or
+file, and a dynamic version (`1.+`, `latest.release`). A packaged file with no version in its name —
+`x.jar` — says nothing about which build was read. Both are listed with the refs that move, and
+neither fails `--check`. A version in a file name is read loosely, as a number after a `-`, `_` or
+`.` (`guava-r09.jar`, `foo-v2.jar`, `Newtonsoft.Json.13.0.3.nupkg`): the forms are many, and a
+pinned file reported as moving costs the list its reader. The blind spot is therefore the other way
+round — a number that is not a version passes (`x86_64` is known and does not count). A build
+numbered once and never published again, such as `0.1.0.<run>`, is a version.
 
 The rule this serves is the same one §4 opens with: an anchor exists so the reader reaches the thing
 in one hop. `ktor-server-core-3.5.2.klib!/…` is one hop. A bare path that no tree contains is none.

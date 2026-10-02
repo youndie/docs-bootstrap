@@ -25,6 +25,16 @@ for, and is listed as such: not looked for is not found.
 The only non-zero exit comes from that check: a scenario naming a test that the repository does
 not contain is a statement of fact that turned out to be false, and unlike a missing automation
 line, it is not a matter of policy.
+
+A LINE THAT NAMES A FILE IS CHECKED FOR THE FILE. Not every automated check is a test function: a
+conformance script, a `run.sh` that drives the binary, the `Main.kt` of a harness. Such a line names
+a path and nothing after `::` or `#`, and through 0.3.6 that path was grepped for as text in the
+other files of the repository - so a script nobody else mentions was reported as one the repository
+does not contain, while it sat at exactly that path. A path is now resolved the way code_anchors.py
+resolves an anchor (SPEC 4): `./x` is `x`, `../` leaves the repository, `.../x` is abbreviated, a
+suffix fits, a cited line range has to be inside the file, and the file has to be in its own
+repository. A path the anchors check would skip as not looking like one - `samples/oracle`, with no
+extension and no source-tree segment - is still searched for as text, as before.
 """
 import argparse
 import json
@@ -32,6 +42,8 @@ import os
 import re
 import subprocess
 import sys
+
+import code_anchors        # beside this file; a path on an `**Automated:**` line is an anchor
 
 # Scenarios do not live in features/ only: a screen document legitimately carries a few of its
 # own. Looking at features/ alone gives a number that disagrees with docs_check.py, which counts
@@ -73,7 +85,7 @@ FENCE = re.compile(r"^\s*(```|~~~)")
 # Read as one token, the first was the test `CommandsTest.kt::TTL` with the needle `TTL`, and the
 # second was grepped for as `KoreKoinTest.routes`, which no source file contains.
 _REPO = r"([A-Za-z0-9][A-Za-z0-9._/-]*)"
-_TEST = r"([A-Za-z0-9_][A-Za-z0-9_./:#-]*)"
+_TEST = r"((?:\.{1,3}/)*[A-Za-z0-9_][A-Za-z0-9_./:#-]*)"
 _LOCATOR = r"([^\s`:#]+(?:::|#)[^`]*[^`\s]|[A-Z][A-Za-z0-9_]*\.[^`]*[^`\s])"
 _LEAD = r"^`?(?:" + _REPO + r"`?[ \t]+`?)?"
 REFERENCE = re.compile(_LEAD + _TEST)                     # one at the start of a text
@@ -86,6 +98,11 @@ FILE_NAME = re.compile(r"^\S+\.[a-z0-9]{1,5}$")
 # it produced - `test_renewal_limit_reached` in `tests/test_loan_rules.py`, a report in
 # `bench/reports/b-16/`. Not a test.
 PATH = re.compile(r"^[^\s:#]*/(?:[^\s/:#]+\.[A-Za-z0-9]{1,6}|)$")
+# A reference that IS a path - a script, a harness's `Main.kt` - rather than a test inside one: a slash,
+# no space, nothing after `::` or `#`, and optionally a line or a range. Checked for the file, not
+# grepped for as text - see the module docstring. `./`, `../` and `.../` in front are read as SPEC 4
+# reads them, which is why the test above may start with them.
+PATH_REFERENCE = re.compile(r"^([^\s:#]*/[^\s:#]*?)(?::(\d+)(?:-(\d+))?)?$")
 # Commentary after the list: a dash or a semicolon outside backticks ends what is read, and a
 # parenthesis outside backticks is an aside - `SagaTimerSinkTest` (in the engine's repository, on a
 # branch) names one test, not three.
@@ -208,7 +225,10 @@ def references(rest):
             pair = m.groups() if m else None
         if pair:
             repo, test = pair
-            out.append({"repo": repo or "", "test": test, "needle": test_needle(test)})
+            ref = {"repo": repo or "", "test": test, "needle": test_needle(test)}
+            if PATH_REFERENCE.match(test):
+                ref["path"] = True
+            out.append(ref)
     return out
 
 
@@ -341,9 +361,45 @@ def find_test(repo, name):
     return (True, inside) if inside else (False, None)
 
 
-def verify(items, repos_root):
+def _check_file(a, trees):
+    """A reference that is a path, resolved as an anchor is (SPEC 4) - see the module docstring.
+
+    `trees` is code_anchors.context(). With a repository or module named, the path is inside it,
+    which is how an anchor writes the same file. Returns False, and leaves the reference alone, when
+    the anchors check would skip the path as not looking like one: then it is searched for as text,
+    as every reference was through 0.3.6."""
+    m = PATH_REFERENCE.match(a["test"])
+    path = m.group(1)
+    if a["repo"]:
+        while path.startswith("./"):
+            path = path[2:]
+        path = a["repo"].rstrip("/") + "/" + path
+    anchor = {"path": path, "shortened": False, "service_hint": ""}
+    if m.group(2):
+        anchor["lines"] = [int(m.group(2)), int(m.group(3) or m.group(2))]
+    if not trees[0]:
+        a["found"] = None              # nothing under --repos to look in
+        return True
+    res = code_anchors.resolve(anchor, *trees)
+    if res["status"] == "skipped":
+        a.pop("path", None)
+        return False
+    if res["status"] == "found":
+        a["found"], a["at"] = True, "{0}/{1}".format(res["repo"], res["at"])
+        return True
+    a["found"], a["at"] = False, ""
+    why = res.get("why", "")
+    if res.get("moved_to"):
+        why = "possibly now: " + ", ".join(res["moved_repo"] + "/" + f for f in res["moved_to"])
+    if why:
+        a["why"] = why
+    return True
+
+
+def verify(items, repos_root, docs_root):
     everything = [os.path.join(repos_root, n) for n in sorted(os.listdir(repos_root))
                   if os.path.isdir(os.path.join(repos_root, n))]
+    trees = None                       # loaded for the first reference that is a path
     for item in items:
         for a in item["references"]:
             # No repository named means "somewhere in what was given", which is the normal case for
@@ -360,6 +416,11 @@ def verify(items, repos_root):
             if not candidates:
                 a["found"] = None          # the repository is not here - nothing was checked
                 continue
+            if a.get("path"):
+                if trees is None:
+                    trees = code_anchors.context(docs_root, repos_root)
+                if _check_file(a, trees):
+                    continue
             a["found"], a["at"] = False, ""
             for candidate in candidates:
                 found, at = find_test(candidate, a["needle"])
@@ -396,7 +457,7 @@ def main():
 
     items = collect(root)
     if args.repos:
-        items = verify(items, os.path.abspath(args.repos))
+        items = verify(items, os.path.abspath(args.repos), root)
 
     total = sum(len(i["scenarios"]) for i in items)
     auto = sum(len(i["automated"]) for i in items)
@@ -440,10 +501,18 @@ def main():
     pct = auto * 100 // total if total else 0
     print("{0:34}{1:>10}{2:>10}   ({3}%)".format("TOTAL", total, auto, pct))
 
-    if missing:
+    tests = [(d, a) for d, a in missing if not a.get("path")]
+    files = [(d, a) for d, a in missing if a.get("path")]
+    if tests:
         print("\nA test is named that the repository does not contain:")
-        for d, a in missing:
+        for d, a in tests:
             print("  {0}: {1} {2}".format(d, a["repo"], a["test"]))
+    if files:
+        print("\nA file is named that is not in its repository (looked for as a path, SPEC 4):")
+        for d, a in files:
+            print("  {0}: {1}".format(d, " ".join(x for x in (a["repo"], a["test"]) if x)))
+            if a.get("why"):
+                print("      {0}".format(a["why"]))
     if unchecked:
         print("\n{0} named test(s) were NOT looked for - the repository or module could not be "
               "found under {1}, so nothing was searched:".format(len(unchecked), args.repos))

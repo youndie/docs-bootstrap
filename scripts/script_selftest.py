@@ -758,6 +758,50 @@ def main():
         expect_true("code_anchors --check passed an address whose left side nobody can fetch",
                     code == 1 and missing_paths(report) == ["Ktor!/src/a.kt"], out)
 
+    # The version is what was read, too. Through 0.3.6 any coordinate and any packaged file passed as
+    # pinned, a snapshot and a jar with no version in its name among them. They are listed with the
+    # moving refs - and a version in a file name is read loosely, so that the forms people actually
+    # ship (`-r09`, `-v2`, `Name.13.0.3`, a build number `0.8.0.14`) stay pinned. The controls on the
+    # other side: a number glued to a word (`linuxx64`, `jdk18on`) and `x86_64` are not versions, and
+    # a tool called "snapshot" is not a snapshot.
+    artefacts = {
+        "x:y:1.2!/a.kt": "external", "io.github.youndie:kontainer:0.1.0.14!/a.kt": "external",
+        "org.springframework:spring-core:5.3.9.RELEASE!/a.kt": "external",
+        "x:y:1.2-SNAPSHOT!/a.kt": "unpinned", "x:y:1.+!/a.kt": "unpinned",
+        "x:y:latest.release!/a.kt": "unpinned", "x:y:+!/a.kt": "unpinned",
+        "x.jar!/a.kt": "unpinned", "x-1.2-SNAPSHOT.jar!/a.kt": "unpinned",
+        "x-1.2-SNAPSHOT-sources.jar!/a.kt": "unpinned", "kotlin-native-2.4.20-SNAPSHOT!/a.kt": "unpinned",
+        "kotlinx-coroutines-core-linuxx64.klib!/a.kt": "unpinned", "bcprov-jdk18on.jar!/a.kt": "unpinned",
+        "lib-linux-x86_64.zip!/a.kt": "unpinned",
+        "ktor-server-core-linuxx64-3.6.0-sources.jar!/a.kt": "external",
+        "guava-r09.jar!/a.kt": "external", "foo-v2.jar!/a.kt": "external",
+        "Newtonsoft.Json.13.0.3.nupkg!/a.kt": "external", "kompot-spec-0.8.0.14.jar!/a.kt": "external",
+        "foo-1.0rc1.jar!/a.kt": "external", "lib-linux-x86_64-1.0.zip!/a.kt": "external",
+        "snapshot-tool-1.0.jar!/a.kt": "external", "kotlin-native-2.4.20!/a.kt": "external",
+        "librdkafka-2.13.0.tar.gz!/a.kt": "external", "x:y:0.1.0.<run>!/a.kt": "skipped",
+    }
+    with tempfile.TemporaryDirectory() as tree:
+        write(tree, "app/src/live.py", "x = 1\n")
+        body = "\n" + "\n".join("* `{0}`".format(a) for a in artefacts) + "\n"
+        write(tree, "docs/research/research-x.md", doc("active", "app/src/live.py", body))
+        code, report, out = anchors(tree, ".", "--check")
+        status = dict((a["path"], a["status"]) for a in (report or {}).get("anchors", [])
+                      if "!/" in a["path"])
+        expect_true("code_anchors did not tell a released coordinate or a versioned file from a "
+                    "snapshot, a dynamic version or a file with no version in its name: {0}".format(
+                        sorted((a, status.get(a), s) for a, s in artefacts.items()
+                               if status.get(a) != s)), status == artefacts, out)
+        expect("code_anchors --check with snapshots and unversioned files and nothing missing",
+               code, 0, out)
+        why = dict((a["path"], a.get("why", "")) for a in (report or {}).get("anchors", []))
+        expect_true("code_anchors did not say why a snapshot, a dynamic version or an unversioned "
+                    "file moves, and what to cite instead",
+                    "snapshot" in why.get("x:y:1.2-SNAPSHOT!/a.kt", "")
+                    and "x:y:<version>" in why.get("x:y:1.2-SNAPSHOT!/a.kt", "")
+                    and "dynamic" in why.get("x:y:1.+!/a.kt", "")
+                    and "no version" in why.get("x.jar!/a.kt", "")
+                    and "snapshot" in why.get("x-1.2-SNAPSHOT.jar!/a.kt", ""), out)
+
     # -- backlog numbers against the base: a rename is not a theft ------------------------------------
     item = "---\nid: B-01\ntitle: \"{0}\"\nstatus: open\n---\n\n{1}\n"
     with tempfile.TemporaryDirectory() as repo:
@@ -829,6 +873,75 @@ A scenario with an `**Automated:**` line names its test; this sentence is about 
                         refs[3:] == [("", "src/LoanTest.kt::a loan is refused while somebody waits",
                                       "a loan is refused while somebody waits", True)], out)
 
+    # A line that names a FILE - a conformance script, a harness's Main.kt - is checked for the file
+    # (SPEC 3.1, 4). Through 0.3.6 the path was grepped for as text in the other files, so a script
+    # nobody else mentions was "not contained" while it sat at that very path, and a deleted one
+    # still mentioned in a Makefile was found. Looked for as an anchor is: in its own repository,
+    # `./` and `.../` as SPEC 4 reads them, `../` leaving it, a cited range inside the file. A path
+    # the anchors check would not take for one (`samples/oracle`) is still searched for as text, and a
+    # named test is still looked for by its name.
+    with tempfile.TemporaryDirectory() as root:
+        repos = os.path.join(root, "repos")
+        own, other = os.path.join(repos, "own"), os.path.join(repos, "other")
+        write(own, "conformance/scripts/hashes.redis", "HSET k f v\n")
+        write(own, "harness/src/Main.kt", "fun main() {\n    smoke()\n}\n")
+        write(own, "samples/oracle/run.sh", "# runs samples/oracle\n")
+        write(own, "src/LoanTest.kt", "class LoanTest {\n  fun `a loan is refused`() {}\n}\n")
+        write(own, "Makefile", "conformance:\n\tredis-cli < conformance/scripts/gone.redis\n")
+        write(other, "scripts/only-other.sh", "exit 0\n")
+        files = {
+            "conformance/scripts/hashes.redis": True, "./conformance/scripts/hashes.redis": True,
+            "harness/src/Main.kt": True, ".../src/Main.kt": True, "harness/src/Main.kt:2-3": True,
+            "other scripts/only-other.sh": True,
+            "conformance/scripts/gone.redis": False, "harness/src/Main.kt:40-52": False,
+            "scripts/only-other.sh": False, "../other/scripts/only-other.sh": False,
+        }
+        body = "\n## 5. Scenarios\n" + "".join(
+            "\n### Scenario: {0}\n* **Automated:** `{1}`\n".format(i, ref)
+            for i, ref in enumerate(list(files) + ["samples/oracle",
+                                                   "src/LoanTest.kt::a loan is refused"]))
+        write(own, "docs/features/feature-x.md", doc("active", "src/LoanTest.kt", body))
+        for repo in (own, other):
+            git(repo, "init", "-q")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-q", "-m", "base")
+        report, out = bdd(own, repos)
+        refs = dict((" ".join(x for x in (r["repo"], r["test"]) if x), r)
+                    for d in (report or {}).get("documents", []) for r in d.get("references", []))
+        found = dict((ref, refs.get(ref, {}).get("found")) for ref in files)
+        expect_true("bdd_report did not check a path on an `**Automated:**` line for the file, in its "
+                    "own repository, as SPEC 4 resolves an anchor: {0}".format(
+                        sorted((ref, found[ref], want) for ref, want in files.items()
+                               if found[ref] != want)), found == files, out)
+        expect_true("bdd_report did not take every path on an `**Automated:**` line for one",
+                    all(refs.get(ref, {}).get("path") for ref in files), out)
+        expect_true("bdd_report did not say why a path that climbs out with `../` is not found",
+                    "`../`" in refs.get("../other/scripts/only-other.sh", {}).get("why", ""), out)
+        expect_true("bdd_report checked a path with no extension as a file instead of searching for "
+                    "it, or a named test for a file, or found neither",
+                    refs.get("samples/oracle", {}).get("found") is True
+                    and not refs.get("samples/oracle", {}).get("path")
+                    and refs.get("src/LoanTest.kt::a loan is refused", {}).get("found") is True
+                    and not refs.get("src/LoanTest.kt::a loan is refused", {}).get("path"), out)
+        code, out = run("bdd_report.py", ["--docs", os.path.join(own, "docs"), "--repos", repos,
+                                          "--check"], own)
+        missing_section = out.split("A file is named that is not in its repository", 1)[-1]
+        expect_true("bdd_report --check passed a file that is not there, or did not list it apart "
+                    "from the tests", code == 1 and "conformance/scripts/gone.redis" in missing_section
+                    and "conformance/scripts/hashes.redis" not in missing_section, out)
+
+    # The same under `--repos .`, where the trees are the documented repository's own directories.
+    with tempfile.TemporaryDirectory() as tree:
+        write(tree, "ci/b-09/run.sh", "exit 0\n")
+        write(tree, "docs/features/feature-x.md", doc(
+            "active", "ci/b-09/run.sh", "\n### Scenario: a\n* **Automated:** `ci/b-09/run.sh`\n"
+                                        "\n### Scenario: b\n* **Automated:** `ci/b-99/run.sh`\n"))
+        report, out = bdd(tree, ".")
+        found = [(r["test"], r.get("found")) for d in (report or {}).get("documents", [])
+                 for r in d.get("references", [])]
+        expect_true("bdd_report --repos . did not check a path for the file",
+                    found == [("ci/b-09/run.sh", True), ("ci/b-99/run.sh", False)], out)
+
     if failures:
         sys.stderr.write("\n\n".join(failures) + "\n")
         return 1
@@ -838,10 +951,11 @@ A scenario with an `**Automated:**` line names its test; this sentence is about 
           "change without a version bump and a template pinning another release refused, reports "
           "that cannot block the gate, anchors not looked for where they should not be, anchors "
           "citing lines looked for and anchors found only in their own repository, `./` read as "
-          "the root and `../` as leaving it, addresses at a branch or at no ref told from pinned "
-          "ones without failing --check, a renamed item told from a stolen number, "
-          "`**Automated:**` lines read as lists and counted only in scenarios, and no guard fires "
-          "on the shape it allows")
+          "the root and `../` as leaving it, addresses at a branch or at no ref, snapshots, dynamic "
+          "versions and unversioned files told from pinned ones without failing --check, a "
+          "renamed item told from a stolen number, `**Automated:**` lines read as lists and "
+          "counted only in scenarios, a line naming a file checked for the file, and no guard "
+          "fires on the shape it allows")
     return 0
 
 

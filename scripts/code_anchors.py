@@ -62,6 +62,17 @@ network and a token for every private repository on every run, and would still p
 exists and moves. The section is not rot and does not fail --check: addresses at a branch were
 legal through 0.3.5, and a report that turns red over a rule nobody was told about is read once.
 
+THE VERSION IS WHAT WAS READ, TOO. A coordinate and a packaged file carry their version in their own
+name, and through 0.3.6 any coordinate and any `.jar` passed as pinned - `x:y:1.2-SNAPSHOT` and
+`x.jar` among them, though a snapshot is published again under the same name and a file with no
+version in its name says nothing about which build was read. Both are listed beside the moving refs,
+and so is a dynamic version (`1.+`, `latest.release`). A version in a file name is read loosely - a
+number after a `-`, `_` or `.` - because the forms are many (`guava-r09.jar`,
+`Newtonsoft.Json.13.0.3.nupkg`, `foo-v2.jar`) and a pinned file flagged as moving costs a reader's
+trust in the list. The price is the other way round: a number that is not a version passes
+(`-x86_64` is known and does not count; `-386` would). A build numbered once and never republished -
+`0.1.0.<run>` - is a version, and pinned.
+
 WHICH REPOSITORY. An anchor is looked for in its own repository and nowhere else: the one its first
 segment names (`konekt/server/...`, when a clone called konekt is under --repos); else the one the
 "Service" column of its table names, through `<docs>/services/<id>.md` and the last segment of its
@@ -120,11 +131,27 @@ FETCHABLE = re.compile(
 )
 
 # The ref of an `owner/repo@ref` address, and what a pinned one looks like - see the module docstring.
-# A coordinate and a packaged file carry their version in their own name; only this form names a ref.
 REPO_ADDRESS = re.compile(r"^[\w.-]+/[\w.-]+(?:@(.+))?$")
 PINNED_REF = re.compile(r"^[0-9a-fA-F]{7,40}$"                     # a commit
                         r"|^[vV]?\d+(?:\.\d+)+(?:[.+-][\w.+-]*)?$"  # v1.31, 4.3.1, 7.6.0.RELEASE
                         r"|^[vV]\d+$")                              # v2
+
+# A coordinate and a packaged file name their version instead - see the module docstring.
+COORDINATE = re.compile(r"^([\w.-]+):([\w.-]+):([\w.+-]+)$")
+PACKAGED = re.compile(r"^([\w.+-]+?)\.(?:jar|klib|aar|war|zip|whl|nupkg|gem|crate|apk|tgz|tar\.gz)$")
+# Published again under the same name: a snapshot, and the versions a resolver picks for itself -
+# Gradle's `1.+` and `latest.release`, Maven's LATEST and RELEASE. In a version field any case is a
+# snapshot; in a file name only Maven's own spelling is, because `foo-snapshot-tool-1.0.jar` is a
+# tool that takes snapshots.
+SNAPSHOT_VERSION = re.compile(r"(?:^|[-.])SNAPSHOT$", re.I)
+SNAPSHOT_IN_NAME = re.compile(r"(?:^|[-_.])SNAPSHOT(?=$|[-_.])")
+DYNAMIC = re.compile(r"^(?:\+|.*[.-]\+|latest\.[\w-]+|LATEST|RELEASE)$")
+# A version in a file name, read loosely: a dotted number after a separator, whatever follows it
+# (`-1.0rc1`), or a plain one that the next separator ends (`-r09`, `-v2`, `-20240101`). A number
+# glued to letters before it is a name, not a version: `log4j`, `jdk18on`, `linuxx64`, `arm64`.
+VERSION_IN_NAME = re.compile(r"(?:^|[-_.])[vVrR]?\d+(?:\.\d+)+|(?:^|[-_.])[vVrR]?\d+(?=$|[-_.+])")
+# The one architecture whose spelling puts a number after a separator.
+NOT_A_VERSION = re.compile(r"x86[-_]64", re.I)
 
 # Not everything with a slash in backticks is a path. What is obviously not one is filtered out,
 # otherwise the report drowns in noise: MIME types, slash-separated enumerations, host names.
@@ -384,21 +411,42 @@ def _within(anchor, found, trees):
                 lines[0], lines[1], found["repo"], found["at"], count)}
 
 
-def moving_ref(what):
-    """Why the ref of an `owner/repo@ref` address moves, or None when it is pinned or the address
-    names no repository. The shape only - see the module docstring."""
+def moving(what):
+    """Why the left side of a fetchable address names something that moves, or None when it names
+    what was read: the ref of `owner/repo@ref`, the version of a coordinate, the version in the name
+    of a packaged file. The shape only - see the module docstring."""
     m = REPO_ADDRESS.match(what)
-    if not m:
+    if m:
+        repo, ref = what.split("@", 1)[0], m.group(1)
+        if ref is None:
+            return ("no @ref, so the default branch, which moves - pin the commit that was read: "
+                    "{0}@<sha>".format(repo))
+        if PINNED_REF.match(ref):
+            return None
+        return ("@{0} is not a commit or a version tag. A branch moves, so a reader does not fetch "
+                "the file that was read, and one that lives only in a local clone cannot be fetched "
+                "at all - pin the commit: {1}@<sha>".format(ref, repo))
+    m = COORDINATE.match(what)
+    if m:
+        group, artifact, version = m.groups()
+        if SNAPSHOT_VERSION.search(version):
+            return ("{0} is a snapshot, published again under the same version, so a reader fetches "
+                    "the latest build rather than the one that was read - cite the release, or the "
+                    "timestamped build: {1}:{2}:<version>".format(version, group, artifact))
+        if DYNAMIC.match(version):
+            return ("{0} is a dynamic version, which the resolver points at whatever is newest - cite "
+                    "the version that was read: {1}:{2}:<version>".format(version, group, artifact))
         return None
-    repo, ref = what.split("@", 1)[0], m.group(1)
-    if ref is None:
-        return ("no @ref, so the default branch, which moves - pin the commit that was read: "
-                "{0}@<sha>".format(repo))
-    if PINNED_REF.match(ref):
-        return None
-    return ("@{0} is not a commit or a version tag. A branch moves, so a reader does not fetch the "
-            "file that was read, and one that lives only in a local clone cannot be fetched at "
-            "all - pin the commit: {1}@<sha>".format(ref, repo))
+    m = PACKAGED.match(what)
+    name = m.group(1) if m else what
+    if SNAPSHOT_IN_NAME.search(name):
+        return ("a snapshot is published again under the same name, so a reader fetches the latest "
+                "build rather than the one that was read - cite the release, or the timestamped build")
+    if m and not VERSION_IN_NAME.search(NOT_A_VERSION.sub("", name)):
+        return ("'{0}' has no version in its name, so nothing says which build was read - cite the "
+                "file by its versioned name, or as a coordinate: <group>:<artifact>:<version>"
+                .format(what))
+    return None
 
 
 def resolve(anchor, trees, svc2repo, own="", single=False):
@@ -418,7 +466,7 @@ def resolve(anchor, trees, svc2repo, own="", single=False):
         # No tree here holds it, and that is the point of the notation rather than a gap in it. What
         # IS checked is that the left side names something a reader can fetch - see FETCHABLE.
         if FETCHABLE.match(what):
-            moves = moving_ref(what)
+            moves = moving(what)
             if moves:
                 return {"status": "unpinned", "what": what, "why": moves}
             return {"status": "external", "what": what}
@@ -553,6 +601,21 @@ def _missing(p, trees):
     return {"status": "missing"}
 
 
+def context(docs_root, repos_root):
+    """What resolve() needs besides the anchor: the trees under `repos_root`, service id ->
+    repository, the tree the documentation lives in ("" if none), and whether the trees are the
+    modules of that one repository - `--repos .` - rather than repositories side by side.
+
+    bdd_report.py resolves an `**Automated:**` line that names a file through this and resolve(), so
+    that a path is found or not by one rule wherever the documentation writes it (SPEC 3.1, 4)."""
+    trees = load_trees(os.path.abspath(repos_root), skip=[docs_root])
+    real_root = os.path.realpath(docs_root)
+    own = next((name for name, tree in trees.items()
+                if real_root.startswith(os.path.realpath(tree["root"]) + os.sep)), "")
+    single = not own and real_root.startswith(os.path.realpath(repos_root) + os.sep)
+    return trees, repo_by_service(docs_root), own, single
+
+
 def main():
     ap = argparse.ArgumentParser(description="Do the code anchors still exist?")
     ap.add_argument("--docs", metavar="PATH", default="docs",
@@ -583,7 +646,7 @@ def main():
               "That is not the same as \"they are all there\".")
         return 0
 
-    trees = load_trees(os.path.abspath(args.repos), skip=[root])
+    trees, svc2repo, own, single = context(root, args.repos)
     if not trees:
         # The same answer as "--repos was not given", because it is the same situation: nothing was
         # checked, and that is said out loud rather than dressed up as a pass. It used to exit 2,
@@ -595,13 +658,6 @@ def main():
               "That is not the same as \"they are all there\".".format(args.repos))
         return 2 if args.check else 0
 
-    svc2repo = repo_by_service(root)
-    # Which tree holds the documentation, and whether the trees are repositories at all: with
-    # `--repos .` they are this repository's own directories.
-    real_root = os.path.realpath(root)
-    own = next((name for name, tree in trees.items()
-                if real_root.startswith(os.path.realpath(tree["root"]) + os.sep)), "")
-    single = not own and real_root.startswith(os.path.realpath(args.repos) + os.sep)
     for a in anchors:
         a.update(resolve(a, trees, svc2repo, own, single))
 
@@ -665,9 +721,10 @@ def main():
             by_doc.setdefault(a["doc"], []).append(a)
         print("AT A REF THAT MOVES")
         print("-" * 72)
-        print("  An address names what was read: a commit, or a version tag. These name a branch, or")
-        print("  no ref at all, so what a reader fetches is not what was read. Not rot, and they do")
-        print("  not fail --check - but each is a claim nobody can check as it was made.")
+        print("  An address names what was read: a commit, a version tag, a released version. These")
+        print("  name a branch, no ref, a snapshot or a file with no version in its name, so what a")
+        print("  reader fetches is not what was read. Not rot, and they do not fail --check - but")
+        print("  each is a claim nobody can check as it was made.")
         for doc in sorted(by_doc):
             print("  {0}".format(doc))
             for a in by_doc[doc]:
