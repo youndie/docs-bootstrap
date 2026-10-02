@@ -52,6 +52,11 @@ BACKLOG_FORM ?= files
 # its siblings too, which a suffix match can mistake for this repository.
 REPOS ?= ..
 PY ?= python3
+# The code-anchors report does not block until this is set. Set it once the report lists nothing
+# and every path outside this repository is an address (SPEC 4.1): then `make check` - and CI, which
+# runs it - fails on a path that resolves to nothing, in the pull request that broke it.
+# `make report ANCHORS_ARGS=` runs it as a report again for one run. check.mk says when to turn it on.
+#ANCHORS_ARGS ?= --check
 
 # Where the pin is, and what it names.
 DOCS_BOOTSTRAP_PIN ?= .github/workflows/check.yaml

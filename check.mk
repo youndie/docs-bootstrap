@@ -72,11 +72,19 @@ endif
 	$(PY) "$(DOCS_BOOTSTRAP_SCRIPTS)/docs_check.py" --docs "$(DOCS)" --backlog "$(BACKLOG)"
 	$(PY) "$(DOCS_BOOTSTRAP_SCRIPTS)/coverage_map.py" --check --docs "$(DOCS)"
 
-# Non-blocking, on purpose, and read by a person. bdd_report counts scenarios; demanding a percentage
+# Non-blocking by default, and read by a person. bdd_report counts scenarios; demanding a percentage
 # is meaningless while acceptance is done by hand. code_anchors goes stale because of a refactor in
 # somebody else's repository rather than because of an edit here, and it cannot tell a live path
-# from one quoted as obsolete. ANCHORS_ARGS=--check makes the second one blocking once its list of
-# stale anchors has reached zero and the team decides to keep it there.
+# from one quoted as obsolete.
+#
+# ANCHORS_ARGS=--check makes code_anchors blocking, and the place to say so is the consumer's
+# Makefile, `ANCHORS_ARGS ?= --check` above the line that says nothing below is to be edited: then
+# `make check` fails on every pull request, and on a laptop, not only in a weekly job. Turn it on
+# once the list is at zero and every path outside the repository is an address (SPEC 4.1) - inside
+# an artefact or at a commit - which no refactor elsewhere can move; what can turn it red then is a
+# path of the repository's own, renamed or deleted in the pull request that broke it, and a path
+# quoted as obsolete is written as an address at a commit it existed in. `make check ANCHORS_ARGS=`
+# (or `make report ANCHORS_ARGS=`) runs it as a report again for one run.
 #
 # NON-BLOCKING IS THE LEADING `-`, NOT THE COMMENT. `make check` is `gate report`, so a report line
 # that exits non-zero fails the check like a gate line does - and a report has more ways to fail than

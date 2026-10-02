@@ -311,11 +311,23 @@ docs-bootstrap being changed, or, offline or without GitHub Actions, a committed
 `check.mk`, `scripts/` and `.claude-plugin/`. That is the copy route again, with its drift: the
 fallback, not the default.
 
-The two reports are non-blocking on purpose. Demanding a percentage of automated scenarios is
+The two reports are non-blocking by default. Demanding a percentage of automated scenarios is
 meaningless while acceptance is manual, and an anchor goes stale because of a refactor in somebody
 else's repository, not because of an edit here — a machine cannot tell a live path from one quoted
-as obsolete. `make fix` regenerates the index and appends the coverage-map lines you forgot; the
-descriptions it writes are placeholders, and finishing them is yours.
+as obsolete.
+
+The anchors report can block, and once it can, it should. When it lists nothing and every path
+outside the repository is an address (SPEC §4.1) — inside an artefact, or `owner/repo@<commit>!/…`
+— no refactor elsewhere can move a path, and what can turn it red is a path of the repository's
+own, renamed or deleted without its document. Set `ANCHORS_ARGS ?= --check` in the Makefile, above
+the line that says nothing below is to be edited (the template carries it commented out):
+`make check` then fails on every pull request that breaks a path, and on a laptop, not only in the
+weekly job. A path quoted as obsolete is written as an address at a commit it existed in.
+`make check ANCHORS_ARGS=` or `make report ANCHORS_ARGS=` runs it as a report again for one run —
+while a neighbour's path is being rewritten as an address, say.
+
+`make fix` regenerates the index and appends the coverage-map lines you forgot; the descriptions it
+writes are placeholders, and finishing them is yours.
 
 ## When the repository already carries copies of the checks
 
