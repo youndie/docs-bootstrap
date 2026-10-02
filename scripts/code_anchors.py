@@ -82,6 +82,34 @@ three is known is every repository searched, and then a path two of them have is
 than found. Under `--repos .` the trees are this repository's own directories, and a match in any of
 them counts.
 
+NOT EVERYTHING WRITTEN LIKE A PATH IS ONE. A word with a slash in backticks is read as a path unless
+its shape says otherwise (a MIME type, a host, a class name with no extension and no source-tree
+segment). Four more kinds are told apart, and each only where the tree cannot hold the path, so that
+a file that is there is never skipped and none of them hides a file that went:
+
+    features/  services/  api/       a layer of this documentation (SPEC 1), not of the code
+    origin/main  refs/tags/v1        a git ref
+    build/libs  server/build/bin/    what the anchor's repository ignores: build output, local state
+    jdk/internal/javac/PreviewFeature  a class in its binary form
+
+A layer name is the one segment, with its slash, that names a layer: it counts when the CODE has a
+directory of that name (`api/` of a library's binary-compatibility dump is one), and is skipped when
+only the documentation does or nothing does - found in the documentation tree it was the document
+pointing at its own layer. An ignored path is asked of git (`git check-ignore`, which never reports a
+tracked file) in the anchor's repository; a walked tree ignores what the walk prunes. Such a path is
+in no checkout, so reported missing it was missing for ever - the class of entry that teaches a
+reader to skip the list. A class name needs every segment but the last to be a lower-case package
+and the last to be a type with two capitals or more (`PreviewFeature`), because `deploy/Dockerfile`
+has the same shape with one.
+
+What the shape cannot tell is left to the writer, in a form that says what it is (SPEC 4): a JVM frame
+`bench/Pricing.quote` is dotted (`bench.Pricing.quote`) - `Pricing.quote` and `Pricing.kt` differ by
+nothing a pattern can hold; a section of somebody's specification (`client/elicitation`) is an
+address into it or prose; a directory of an installed runtime or toolchain carries its root
+(`$JAVA_HOME/jmods`, `<image>/bin/`); a URL segment carries its host or slash (`/tree/<ref>`). One
+segment is the weakest anchor there is: `runtime/` is found in any package called runtime, whatever
+the sentence meant, so a directory of the code is written with enough of its path to be its own.
+
 WITHOUT --repos THE SCRIPT ASSERTS NOTHING. "Not checked" and "no violations" are different
 statements; the first one is printed explicitly.
 
@@ -169,6 +197,13 @@ STRUCTURAL = re.compile(
     r"|server|client|shared|common|core|docs)(/|$)"
 )
 
+# What looks like a path and is not one, told apart only where the tree cannot hold the path - see
+# the module docstring. The layers are SPEC 1's: `backlog/` and `templates/` beside the five folders
+# above, which are the layers that carry anchors.
+LAYERS = set(FOLDERS) | {"backlog", "templates"}
+GIT_REF = re.compile(r"^(?:origin|upstream)/[^/]|^refs/(?:heads|tags|remotes)/")
+CLASS_BINARY = re.compile(r"^(?:[a-z_][a-z0-9_]*/)+[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+$")
+
 # Directories that are build output or tooling state: never worth indexing, and big enough to make
 # the walk slow if they are.
 #
@@ -254,7 +289,7 @@ def _git_tree(path):
     files = {ln.strip() for ln in res.stdout.split("\n") if ln.strip()}
     if not files:
         return None
-    return {"files": files, "dirs": _dirs_of(files)}
+    return {"files": files, "dirs": _dirs_of(files), "git": True}
 
 
 def _walked_tree(path):
@@ -461,6 +496,66 @@ def resolve(anchor, trees, svc2repo, own="", single=False):
     modules of one repository - `--repos` is the documented repository itself - rather than
     repositories side by side.
     """
+    res = _lookup(anchor, trees, svc2repo, own, single)
+    if anchor.get("external") or res["status"] not in ("found", "missing"):
+        return res
+    return _not_a_path(anchor, res, trees, svc2repo, own) or res
+
+
+def _not_a_path(anchor, res, trees, svc2repo, own):
+    """Why an anchor the lookup found nothing for is not a path into the code, as a skip, or None -
+    see the module docstring. Only a plain "not found" is looked at: a file seen in another
+    repository, a range past a file's end and a path that climbs out are about a real file. The one
+    found result looked at is a layer name found in the documentation tree itself."""
+    p = anchor["path"]
+    while p.startswith("./"):
+        p = p[2:]
+    if p.startswith(".../"):
+        p = p[4:]
+    if p.rstrip("/") in LAYERS and p.endswith("/"):
+        if res["status"] == "missing" or _in_docs(trees.get(res.get("repo"), {}), res.get("at", "")):
+            return {"status": "skipped",
+                    "why": "a layer of the documentation (SPEC 1), not a path into the code"}
+        return None
+    if res["status"] != "missing" or res.get("why") or res.get("elsewhere"):
+        return None
+    if GIT_REF.match(p):
+        return {"status": "skipped", "why": "a git ref, not a path"}
+    if CLASS_BINARY.match(p):
+        return {"status": "skipped",
+                "why": "a class in its binary form, not a path - written dotted, it reads as one"}
+    named = p.split("/", 1)[0]
+    hint = svc2repo.get(anchor.get("service_hint", ""), "")
+    owner = next((r for r in (hint, own) if r in trees), "")
+    held = [named] if named in trees and "/" in p else [owner] if owner else list(trees)
+    if held and all(_ignored(trees[r], p) for r in held):
+        return {"status": "skipped",
+                "why": "ignored by {0}: build output or local state, which no checkout holds"
+                       .format(", ".join(held))}
+    return None
+
+
+def _in_docs(tree, at):
+    """Is `at` inside the documentation tree that lives in this tree (see context())?"""
+    docs = tree.get("docs")
+    return bool(docs) and (at == docs or at.startswith(docs + "/"))
+
+
+def _ignored(tree, p):
+    """Does the tree ignore `p`? A checkout is asked through git, which applies every .gitignore and
+    never reports a tracked file; a walked tree ignores what the walk prunes."""
+    if not tree.get("git"):
+        return any(seg in IGNORED_DIRS for seg in p.split("/"))
+    try:
+        res = subprocess.run(["git", "check-ignore", "-q", "--", p], cwd=tree["root"],
+                             capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return res.returncode == 0
+
+
+def _lookup(anchor, trees, svc2repo, own="", single=False):
+    """resolve() before the question of whether the anchor is a path at all."""
     what = anchor.get("external")
     if what:
         # A placeholder is a pattern, not an address, and the notation is documented with one -
@@ -617,6 +712,11 @@ def context(docs_root, repos_root):
     real_root = os.path.realpath(docs_root)
     own = next((name for name, tree in trees.items()
                 if real_root.startswith(os.path.realpath(tree["root"]) + os.sep)), "")
+    if own:
+        # Where the documentation sits inside its own tree: a layer name found there is the document
+        # pointing at its own layer, not at the code (see _not_a_path).
+        trees[own]["docs"] = os.path.relpath(real_root, os.path.realpath(trees[own]["root"])) \
+            .replace(os.sep, "/")
     single = not own and real_root.startswith(os.path.realpath(repos_root) + os.sep)
     return trees, repo_by_service(docs_root), own, single
 

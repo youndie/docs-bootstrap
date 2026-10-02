@@ -111,7 +111,7 @@ faith.
 | `plugin_check.py` | the skill's name in `SKILL.md`, `plugin.json` and `marketplace.json` is one name, and every declared skill directory holds a `SKILL.md`; the tag `templates/workflow-check.yaml` pins is that version; **on a pull request, that a change to anything the plugin ships raises `version` above the base branch's** — otherwise `claude plugin update` never sees it | blocking |
 | `script_selftest.py` | what the scripts above do on the cases `make check` cannot reach, since it runs them against the example: a tree that is **absent**, and defects the example does not carry — each guard held from both sides, a fixture that must trip it and one that must not | blocking |
 | `bdd_report.py` | counts scenarios and how many are automated | report |
-| `code_anchors.py` | whether the paths still exist, the design reference PNGs of a screen included | report, scheduled; blocking once the consumer's Makefile sets `ANCHORS_ARGS ?= --check` — when every path outside the repository is an address (SPEC §4.1) and the list is at zero |
+| `code_anchors.py` | whether the paths still exist, the design reference PNGs of a screen included; a layer name, a git ref, build output the repository ignores and a class in its binary form are not taken for paths (SPEC §4) | report, scheduled; blocking once the consumer's Makefile sets `ANCHORS_ARGS ?= --check` — when every path outside the repository is an address (SPEC §4.1) and the list is at zero |
 
 Three things they deliberately do **not** do:
 
