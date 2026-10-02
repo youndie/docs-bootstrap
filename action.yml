@@ -23,7 +23,8 @@ inputs:
   target:
     description: >
       What to run: make target(s), optionally with VAR=value overrides, split on whitespace.
-      `check` is the gate and the reports; the scheduled anchors job passes `report`.
+      `check` is the gate and the reports; the scheduled anchors job passes `report`. A target of
+      the project's own that runs the checks has to be in its Makefile's DOCS_BOOTSTRAP_GOALS.
     required: false
     default: check
   working-directory:

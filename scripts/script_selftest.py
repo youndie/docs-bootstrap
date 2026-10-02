@@ -14,11 +14,14 @@ It began with one defect of the first kind. `backlog_index.py --check` printed "
 that stopped matching was reported as a pass - on a green step, in a log nobody opens. A check that
 cannot find its subject and reports success is worse than no check.
 """
+import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
@@ -33,19 +36,90 @@ def run(script, args, cwd):
     return result.returncode, (result.stdout + result.stderr)
 
 
-def make(args, cwd):
-    """The consumer's Makefile (templates/Makefile), run in a directory standing in for a project.
+def make(args, cwd, makefile=None, extra_env=None):
+    """The consumer's Makefile (templates/Makefile, or a project's Makefile built from it), run in a
+    directory standing in for a project.
 
     The environment is scrubbed of anything a calling make or a calling CI would leak in: MAKEFLAGS
     carries the caller's command-line variables into every make below it, and a DOCS_BOOTSTRAP in
     the environment would answer the very question the pin cases ask.
     """
     leak = {"MAKEFLAGS", "MFLAGS", "MAKELEVEL", "MAKEFILES", "DOCS_BOOTSTRAP", "DOCS", "BACKLOG",
-            "BACKLOG_FORM", "REPOS"}
+            "BACKLOG_FORM", "REPOS", "DOCS_BOOTSTRAP_GOALS"}
     env = {k: v for k, v in os.environ.items() if k not in leak}
-    result = subprocess.run(["make", "--no-print-directory", "-f", TEMPLATE] + args,
+    env.update(extra_env or {})
+    result = subprocess.run(["make", "--no-print-directory", "-f", makefile or TEMPLATE] + args,
                             cwd=cwd, env=env, capture_output=True, text=True)
     return result.returncode, (result.stdout + result.stderr)
+
+
+# curl as far as the template's fetch uses it. Every call is written down, and the download is a
+# copy of a local tarball - or, when none is given, what curl does on a machine with no network.
+STUB_CURL = """#!/bin/sh
+out= url=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out=$2; shift;;
+    --retry) shift;;
+    -*) ;;
+    *) url=$1;;
+  esac
+  shift
+done
+echo "$url" >> "$SELFTEST_CURL_LOG"
+if [ -n "$SELFTEST_TARBALL" ]; then exec cp "$SELFTEST_TARBALL" "$out"; fi
+echo "curl: (7) Failed to connect: this test has no network" >&2
+exit 7
+"""
+
+
+def no_network(root, tarball=None):
+    """An environment in which nothing can be downloaded: curl is the stub above, and every proxy a
+    real client would honour points at a closed port. Returns it and the file the stub logs to."""
+    write(root, "bin/curl", STUB_CURL)
+    os.chmod(os.path.join(root, "bin", "curl"), 0o755)
+    log = os.path.join(root, "curl.log")
+    write(root, "curl.log", "")
+    closed = "http://127.0.0.1:9"
+    env = {"PATH": os.path.join(root, "bin") + os.pathsep + os.environ.get("PATH", ""),
+           "SELFTEST_CURL_LOG": log, "SELFTEST_TARBALL": tarball or "",
+           "http_proxy": closed, "https_proxy": closed, "HTTP_PROXY": closed,
+           "HTTPS_PROXY": closed, "ALL_PROXY": closed, "no_proxy": "", "NO_PROXY": ""}
+    return env, log
+
+
+def fetches(log):
+    with open(log, encoding="utf-8") as fh:
+        return [line.strip() for line in fh if line.strip()]
+
+
+def release_tarball(root, ref):
+    """What GitHub serves for REF, built from this checkout: one top directory holding the files a
+    consumer's Makefile reads."""
+    path = os.path.join(root, "src.tar.gz")
+    skip = lambda info: None if "__pycache__" in info.name else info
+    with tarfile.open(path, "w:gz") as tar:
+        for name in ("check.mk", "scripts", ".claude-plugin", "templates"):
+            tar.add(os.path.join(REPO, name), arcname="docs-bootstrap-{0}/{1}".format(ref, name),
+                    filter=skip)
+    return path
+
+
+def checkmk_targets():
+    """The targets check.mk declares - its .PHONY lines."""
+    targets = []
+    with open(os.path.join(REPO, "check.mk"), encoding="utf-8") as fh:
+        for line in fh:
+            if line.startswith(".PHONY:"):
+                targets += line.split(":", 1)[1].split()
+    return targets
+
+
+def assigned(path, name):
+    """The value a makefile assigns to NAME with `:=`, or None."""
+    with open(path, encoding="utf-8") as fh:
+        m = re.search(r"^" + re.escape(name) + r"\s*:=\s*(.*)$", fh.read(), re.M)
+    return m.group(1).strip() if m else None
 
 
 def pinned_copy(project, ref):
@@ -207,6 +281,12 @@ def failing_python(root, scripts):
 
 
 def main():
+    global TEMPLATE
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("--template", default=TEMPLATE,
+                        help="run the Makefile cases against another consumer's Makefile - how a "
+                             "case added for a fix is shown to fail on the template before it")
+    TEMPLATE = os.path.abspath(parser.parse_args().template)
     failures = []
 
     def expect(label, code, wanted, output):
@@ -280,6 +360,116 @@ def main():
         write(project, ".github/workflows/check.yaml", uses.format("v9.9.9") + uses.format("v9.9.8"))
         code, out = make(["docs-bootstrap-path"], project)
         expect_true("the Makefile chose between two pins", code != 0 and "more than one" in out, out)
+
+    # -- the consumer's Makefile: only a goal that runs the checks loads them -----------------------
+    # A project adds goals of its own below the template's head, and make reads every included file -
+    # fetching one that is missing - before it runs any goal. Through 0.3.4 check.mk was included
+    # whatever the goal, so on a fresh clone `make chart`, `make` alone and `make -n` downloaded the
+    # checks, and offline they failed. Here curl is a stub that writes every call down and has no
+    # network, and every proxy points at a closed port.
+    with open(TEMPLATE, encoding="utf-8") as fh:
+        template = fh.read()
+    own = "\nhello:\n\t@echo hello from the project\n\nci: check\n"
+    url = "https://codeload.github.com/youndie/docs-bootstrap/tar.gz/v9.9.9"
+    with tempfile.TemporaryDirectory() as project:
+        write(project, ".github/workflows/check.yaml", uses.format("v9.9.9"))
+        write(project, "Makefile", template + own)
+        env, log = no_network(project)
+        cache = os.path.join(project, ".docs-bootstrap")
+
+        def offline(args):
+            """Exit code, output, and the downloads this run attempted."""
+            before = len(fetches(log))
+            code, out = make(args, project, os.path.join(project, "Makefile"), env)
+            tried = fetches(log)[before:]
+            return code, out + "\ncurl was called for: {0}".format(tried or "nothing"), tried
+
+        for args, what in ((["hello"], "a goal of the project's own"),
+                           (["-n", "hello"], "make -n of a goal of the project's own"),
+                           ([], "make with no goal (the default, help)")):
+            code, out, tried = offline(args)
+            expect_true("{0}, offline: wanted it to run without fetching the checks".format(what),
+                        code == 0 and tried == [] and not os.path.exists(cache), out)
+
+        # A goal of the project's own that leads to the checks without being listed stops, and says
+        # which variable to add it to, rather than make's "No rule to make target docs-gate".
+        code, out, tried = offline(["ci"])
+        expect_true("an unlisted goal leading to docs-gate did not stop on DOCS_BOOTSTRAP_GOALS",
+                    code != 0 and "DOCS_BOOTSTRAP_GOALS" in out and tried == [], out)
+
+        # The positive control: the same goal, listed, loads the checks - exactly what every goal did
+        # through 0.3.4 - and the stub sees the fetch, and fails it. Without this the cases above
+        # prove nothing: a stub that is never consulted passes them too.
+        code, out, tried = offline(["hello", "DOCS_BOOTSTRAP_GOALS=hello"])
+        expect_true("a listed goal did not try to fetch the pinned ref through curl",
+                    code != 0 and tried == [url], out)
+
+        # The pin is read for the checks only: without one, a goal of the project's own still runs.
+        os.remove(os.path.join(project, ".github", "workflows", "check.yaml"))
+        code, out, tried = offline(["hello"])
+        expect("a goal of the project's own with no pin", code, 0, out)
+        code, out, tried = offline(["check"])
+        expect_true("make check ran with no pin to read", code != 0 and "uses:" in out, out)
+
+    # ... and every goal that runs the checks still loads them, the way it did: on a fresh clone it
+    # fetches the pinned ref - under -n too, since make remakes an included file even when asked
+    # only to print - and `make check` then checks with what it fetched. The download is a tarball
+    # of this checkout, served by the stub.
+    goals = ["check", "gate", "report", "fix"] + checkmk_targets()
+    expect_true("check.mk declares a target outside the `docs-` prefix the template loads it for: "
+                "{0}".format(goals[4:]), goals[4:] and all(t.startswith("docs-") for t in goals[4:]),
+                "")
+    listed = "DOCS_BOOTSTRAP_GOALS := check gate report fix\n"
+    expect_true("the template does not list check gate report fix in DOCS_BOOTSTRAP_GOALS",
+                listed in template, "")
+    with tempfile.TemporaryDirectory() as root:
+        project = os.path.join(root, "project")
+        shutil.copytree(os.path.join(REPO, "example"), project)
+        write(project, ".github/workflows/check.yaml", uses.format("v9.9.9"))
+        write(project, "Makefile",
+              template.replace(listed, listed + "DOCS_BOOTSTRAP_GOALS += ci\n") + own)
+        env, log = no_network(root, release_tarball(root, "v9.9.9"))
+        cache = os.path.join(project, ".docs-bootstrap")
+
+        def online(args, makefile="Makefile", fresh=True):
+            """Exit code, output, and the downloads this run attempted - on a fresh clone unless
+            told otherwise."""
+            if fresh:
+                shutil.rmtree(cache, ignore_errors=True)
+            before = len(fetches(log))
+            code, out = make(args, project, os.path.join(project, makefile), env)
+            tried = fetches(log)[before:]
+            return code, out + "\ncurl was called for: {0}".format(tried or "nothing"), tried
+
+        for goal in goals + ["ci"]:
+            code, out, tried = online(["-n", goal, "BASE=origin/main", "REPOS=."])
+            expect_true("make -n {0} on a fresh clone did not fetch the pinned ref".format(goal),
+                        tried == [url], out)
+
+        # A project whose default goal is the gate: `make` alone is a goal that runs the checks.
+        write(project, "Makefile.default",
+              template.replace(".DEFAULT_GOAL := help", ".DEFAULT_GOAL := check") + own)
+        code, out, tried = online(["-n"], "Makefile.default")
+        expect_true("make with no goal, the default goal being check, did not fetch the pinned ref",
+                    tried == [url], out)
+
+        code, out, tried = online(["check", "REPOS=."])
+        expect_true("make check on a fresh clone did not fetch the pinned ref and pass on it, "
+                    "without a warning about the template's revision",
+                    code == 0 and tried == [url]
+                    and os.path.isfile(os.path.join(cache, "v9.9.9", "check.mk"))
+                    and "from .docs-bootstrap/v9.9.9" in out and "expects revision" not in out, out)
+
+        # Fetched once: the next run reads the copy.
+        code, out, tried = online(["gate"], fresh=False)
+        expect_true("make gate fetched again over a fetched copy", code == 0 and tried == [], out)
+
+    # The revision the template states is the one check.mk expects; otherwise every project copying
+    # the current template would be told on every run that its Makefile is out of date.
+    shim = assigned(TEMPLATE, "DOCS_BOOTSTRAP_SHIM")
+    current = assigned(os.path.join(REPO, "check.mk"), "DOCS_BOOTSTRAP_SHIM_CURRENT")
+    expect_true("the template is revision {0} and check.mk expects {1}".format(shim, current),
+                shim is not None and shim == current, "")
 
     # -- scenarios nothing counts (SPEC 3.1) -------------------------------------------------------
     # The positive control: the fixture built to trip the warning trips it, and the exit code stays
@@ -573,7 +763,8 @@ A scenario with an `**Automated:**` line names its test; this sentence is about 
         sys.stderr.write("\n\n".join(failures) + "\n")
         return 1
     print("script_selftest: every case passed - absent subjects refused by the scripts and by the "
-          "Makefile, the pin read once and never guessed, uncounted scenarios reported, a shipped "
+          "Makefile, the pin read once and never guessed, the checks loaded and fetched for the goals that run "
+          "them and for no other, uncounted scenarios reported, a shipped "
           "change without a version bump and a template pinning another release refused, reports "
           "that cannot block the gate, anchors not looked for where they should not be, anchors "
           "citing lines looked for and anchors found only in their own repository, a renamed "

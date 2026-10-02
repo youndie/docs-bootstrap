@@ -288,6 +288,17 @@ its subject is not there — no `docs/`, or `BACKLOG_FORM=files` and no `docs/ba
 because every script treats a missing tree as nothing to check, and a gate that cannot find its
 subject must not report success. The line it prints names the version of the checks that ran.
 
+Only the goals that run the checks load them: `check`, `gate`, `report` and `fix` — the list in
+`DOCS_BOOTSTRAP_GOALS` — and check.mk's own `docs-` targets. The project's other targets below the
+template's head — a chart, a stand, a release — and `make` with no goal run without reading the pin
+and without the network: make fetches an included file before it runs any goal, so a Makefile that
+always included check.mk made every one of them download it on a fresh clone and fail offline. A
+goal of the project's own that leads to the checks (`ci: check build`) is added to
+`DOCS_BOOTSTRAP_GOALS` above the line that says nothing below is to be edited; left out, it stops
+with a message naming that variable. A Makefile copied from an earlier revision of the template
+keeps working, and check.mk warns that it is one; it is moved like a Makefile of copies in the
+section below — the new template, with the project's own lines carried over.
+
 Checks of the project's own go under `gate:` in the Makefile, where CI runs them too.
 `DOCS_BOOTSTRAP=<dir> make check` runs the checks from a directory instead — a clone of
 docs-bootstrap being changed, or, offline or without GitHub Actions, a committed copy of its
@@ -309,8 +320,9 @@ checks, in one pull request:
   `code_anchors.py`** → delete them. A script of the project's own stays, and its line moves under
   `gate:` in the new Makefile.
 * **The Makefile** → [templates/Makefile](templates/Makefile). Carry over `DOCS`, `BACKLOG`,
-  `REPOS` and the project's own gate lines; set `BACKLOG_FORM`. A hand-written guard (`test -d docs`, a count of
-  `docs/backlog/B-*.md`) goes — `docs-guard` in check.mk does that now.
+  `REPOS` and the project's own gate lines; set `BACKLOG_FORM`; a target of the project's own that
+  runs `check`, `gate`, `report` or `fix` goes into `DOCS_BOOTSTRAP_GOALS`. A hand-written guard
+  (`test -d docs`, a count of `docs/backlog/B-*.md`) goes — `docs-guard` in check.mk does that now.
 * **`.github/workflows/check.yaml`** → the steps `setup-python`, `pip install pyyaml`, the
   `backlog_index.py --against` step, `make check` and the `docs_check.py --on-main` step become one
   `uses: youndie/docs-bootstrap@<tag>`, the tag in
