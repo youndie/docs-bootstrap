@@ -177,14 +177,19 @@ this way it is reported as what it is. The left side has to name something a rea
 versioned file, a coordinate, or `owner/repo` — so the notation cannot be used to quiet an anchor
 that really has rotted. [SPEC §4.1](SPEC.md).
 
+A document marked `status: deprecated` keeps its anchors as a record of where the behaviour was;
+the checker skips them and says so ([SPEC §4](SPEC.md)).
+
 ### 5. BDD scenarios are acceptance criteria
 
 Write them against behaviour you have confirmed in the code: real status codes, real error strings.
 While the code does not exist, mark them *target*. A scenario covered by a test carries an
 `**Automated:**` line naming it — `**Automated:** catalog-api LoanRoutesTest` when several
 repositories are in play, or just the test when one is, in whatever form that project writes
-(`tests/test_store.py::test_name` is fine). The absence of that line means the check is manual, and
-that asymmetry is worth seeing.
+(`tests/test_store.py::test_name` and `LoanRoutesTest.a renewal is refused` are fine). Several
+tests are a comma-separated list, each in its own backticks; after a dash or a semicolon the line is
+commentary. The line goes under the scenario it automates — the same line in a business rule is not
+counted. The absence of that line means the check is manual, and that asymmetry is worth seeing.
 
 Give every scenario its own `### Scenario: <name>` heading, in English even in a document written
 in another language: the heading is what the tools count. The steps under it may be the template's
@@ -306,6 +311,9 @@ checks, in one pull request:
   [templates/workflow-check.yaml](templates/workflow-check.yaml); the anchors job's steps become the
   same line with `target: report`. Steps that are not the documentation gate — a formatter, a build —
   stay as they are.
+* **`docs/templates/`** → leave it, or refresh it from [templates/](templates/): the copies of
+  0.3.0 and earlier tell an author to run `python3 scripts/backlog_index.py`, which is gone once the
+  copies are; from 0.3.1 they say `make fix` and `make check`.
 * **Renovate** needs nothing when the repository extends a preset with the github-actions manager
   on, which is the default.
 

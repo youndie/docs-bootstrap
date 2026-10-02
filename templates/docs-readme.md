@@ -49,14 +49,19 @@ Sections marked `<!-- optional -->` can be deleted.
 
 ## Checks
 
+The repository's Makefile runs docs-bootstrap's checks at the version `.github/workflows/check.yaml`
+pins, and CI runs the same targets:
+
 ```bash
 pip install pyyaml
-python3 scripts/backlog_index.py --check
-python3 scripts/docs_check.py
-python3 scripts/coverage_map.py --check
-python3 scripts/bdd_report.py
-python3 scripts/code_anchors.py --repos ..
+make check      # the gate, then the reports: what CI runs
+make fix        # regenerate the backlog index, append missing coverage-map lines
+make docs-against BASE=origin/main   # item numbers against the branch this one merges into
 ```
+
+A repository that keeps copies of the checks in `scripts/` instead runs them by name:
+`backlog_index.py --check`, `docs_check.py`, `coverage_map.py --check`, then the reports
+`bdd_report.py` and `code_anchors.py --repos ..`.
 
 ## Coverage map
 

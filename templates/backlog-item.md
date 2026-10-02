@@ -26,5 +26,6 @@ than generalities: which file, which behaviour, what the user sees.
 Links:
   · "related" — an ordinary link in the text: [B-12](B-12-some-slug.md)
   · "blocks"  — the blocked_by field above; the index reads it
-After editing: python3 scripts/backlog_index.py
+After editing: make fix, which regenerates the index (with copies of the checks in scripts/:
+python3 scripts/backlog_index.py); then make check
 -->

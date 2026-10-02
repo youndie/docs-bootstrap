@@ -165,6 +165,47 @@ def uncounted(tree):
     return code, [w for w in report["warnings"] if w["check"] == "uncounted-scenarios"], out
 
 
+def anchors(tree, repos, *extra):
+    """code_anchors' exit code and its JSON report, run from `tree` against `repos`."""
+    code, out = run("code_anchors.py", ["--json", "--docs", os.path.join(tree, "docs"),
+                                        "--repos", repos] + list(extra), tree)
+    try:
+        return code, json.loads(out), out
+    except ValueError:
+        return code, None, out
+
+
+def missing_paths(report):
+    return sorted(a["path"] for a in report["anchors"] if a["status"] == "missing") if report else None
+
+
+def bdd(tree, repos=None):
+    """bdd_report's JSON report on a tree, with the existence check when `repos` is given."""
+    args = ["--json", "--docs", os.path.join(tree, "docs")] + (["--repos", repos] if repos else [])
+    code, out = run("bdd_report.py", args, tree)
+    try:
+        return json.loads(out), out
+    except ValueError:
+        return None, out
+
+
+def doc(status, anchor, body=""):
+    """A feature document with one anchor and the given status."""
+    return ("---\nid: feature-x\ntitle: X\ntype: feature\nstatus: {0}\ninvolved_services: []\n"
+            "client_entries: []\napi: []\n---\n\n| Service | Code |\n|---|---|\n| app | `{1}` |\n{2}"
+            .format(status, anchor, body))
+
+
+def failing_python(root, scripts):
+    """A PY that fails for the named scripts - the way a killed report fails - and runs the rest."""
+    path = os.path.join(root, "py-failing")
+    cases = "|".join("*/" + name for name in scripts)
+    write(root, "py-failing", '#!/bin/sh\ncase "$1" in {0}) echo "killed: $1" >&2; exit 137;; esac\n'
+                              'exec "{1}" "$@"\n'.format(cases, sys.executable))
+    os.chmod(path, 0o755)
+    return path
+
+
 def main():
     failures = []
 
@@ -311,13 +352,160 @@ def main():
         code, out = run("plugin_check.py", ["--root", repo], repo)
         expect("plugin_check: a template pinning the shipping release", code, 0, out)
 
+    # -- reports do not block, the gate does (check.mk docs-report) -----------------------------------
+    # `make check` is `gate report`. A report that dies - killed for memory, a walk that started at
+    # `/` - must leave it green, and a gate line that fails must still turn it red: the second half
+    # is what proves the first is not a check that never fails.
+    with tempfile.TemporaryDirectory() as project:
+        shutil.copytree(os.path.join(REPO, "example"), project, dirs_exist_ok=True)
+        base = ["check", "REPOS=."] + here
+        reports_die = failing_python(project, ["bdd_report.py", "code_anchors.py"])
+        code, out = make(base + ["PY=" + reports_die], project)
+        expect("make check with both reports failing", code, 0, out)
+
+        gate_dies = failing_python(project, ["docs_check.py"])
+        code, out = make(base + ["PY=" + gate_dies], project)
+        expect_true("make check passed with a gate line failing", code != 0, out)
+
+        # ANCHORS_ARGS=--check is the documented request to block on the anchors, and keeps working.
+        code, out = make(base + ["PY=" + reports_die, "ANCHORS_ARGS=--check"], project)
+        expect_true("make check ANCHORS_ARGS=--check passed with the anchors report failing",
+                    code != 0, out)
+
+    # -- code anchors: what is not looked in, and what is not looked at -------------------------------
+    # A deprecated document's anchors say where the behaviour was (SPEC 6); they are not rot. Held
+    # from both sides: the same document, active, reports the same anchor missing.
+    with tempfile.TemporaryDirectory() as tree:
+        write(tree, "app/src/live.py", "x = 1\n")
+        write(tree, "docs/features/feature-x.md", doc("deprecated", "app/src/gone.py"))
+        code, report, out = anchors(tree, ".", "--check")
+        expect("code_anchors --check on a deprecated document's anchor", code, 0, out)
+        expect_true("code_anchors did not name the deprecated document it skipped",
+                    report is not None and report.get("deprecated_documents") == ["features/feature-x.md"],
+                    out)
+        write(tree, "docs/features/feature-x.md", doc("active", "app/src/gone.py"))
+        code, report, out = anchors(tree, ".", "--check")
+        expect("code_anchors --check on an active document's missing anchor", code, 1, out)
+
+    # `--repos .` makes this repository's subdirectories the trees, `.github` among them.
+    with tempfile.TemporaryDirectory() as tree:
+        write(tree, ".github/workflows/check.yaml", "on: push\n")
+        write(tree, "app/src/live.py", "x = 1\n")
+        write(tree, "docs/features/feature-x.md", doc("active", ".github/workflows/check.yaml"))
+        code, report, out = anchors(tree, ".")
+        expect_true("code_anchors --repos . reported an anchor into .github/ as missing",
+                    missing_paths(report) == [], out)
+
+    # A tree that is walked, not listed by git, must not index the checks a Makefile fetched into
+    # .docs-bootstrap/ - they carry docs-bootstrap's own example, `routes/loans.py` included.
+    fetched = ".docs-bootstrap/v9.9.9/example/loans-service/src/loans_service/routes/loans.py"
+    with tempfile.TemporaryDirectory() as tree:
+        write(tree, "app/src/live.py", "x = 1\n")
+        write(tree, "app/" + fetched, "x = 1\n")
+        write(tree, "docs/features/feature-x.md", doc("active", "routes/loans.py"))
+        code, report, out = anchors(tree, ".")
+        expect_true("code_anchors found an anchor inside a fetched .docs-bootstrap/",
+                    missing_paths(report) == ["routes/loans.py"], out)
+
+    # A worktree is a git checkout whose `.git` is a file. Read as a plain directory it was walked,
+    # and what git ignores - here a fetched copy of the checks - resolved anchors and named tests.
+    with tempfile.TemporaryDirectory() as root:
+        origin, repos = os.path.join(root, "origin"), os.path.join(root, "repos")
+        write(origin, "src/live.py", "x = 1\n")
+        write(origin, ".gitignore", "generated/\n")
+        git(origin, "init", "-q")
+        git(origin, "add", "-A")
+        git(origin, "commit", "-q", "-m", "base")
+        worktree = os.path.join(repos, "app")
+        os.makedirs(repos)
+        git(origin, "worktree", "add", "-q", worktree)
+        write(worktree, "generated/routes/loans.py", "def test_ghost(): pass\n")
+        tree = os.path.join(root, "doctree")
+        write(tree, "docs/features/feature-x.md", doc(
+            "active", "routes/loans.py",
+            "\n### Scenario: a ghost\n* **Automated:** `test_ghost`\n"))
+        code, report, out = anchors(tree, repos)
+        expect_true("code_anchors walked a worktree and found an anchor in an ignored directory",
+                    missing_paths(report) == ["routes/loans.py"], out)
+        report, out = bdd(tree, repos)
+        found = [r.get("found") for d in (report or {}).get("documents", []) for r in d.get("references", [])]
+        expect_true("bdd_report walked a worktree and found a test in an ignored directory",
+                    found == [False], out)
+
+    # -- backlog numbers against the base: a rename is not a theft ------------------------------------
+    item = "---\nid: B-01\ntitle: \"{0}\"\nstatus: open\n---\n\n{1}\n"
+    with tempfile.TemporaryDirectory() as repo:
+        write(repo, "docs/backlog/B-01-old-title.md", item.format("Old", "A long enough body for "
+              "git to see the same file under a new name, line one.\nline two\nline three\n"))
+        git(repo, "init", "-q")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", "base")
+        git(repo, "tag", "base")
+        git(repo, "mv", "docs/backlog/B-01-old-title.md", "docs/backlog/B-01-new-title.md")
+        git(repo, "commit", "-q", "-m", "retitle")
+        code, out = run("backlog_index.py", ["--against", "base"], repo)
+        expect("backlog_index --against: the branch renamed its own item", code, 0, out)
+
+        # The control: the same number under another slug, NOT a rename - a different task.
+        git(repo, "rm", "-q", "docs/backlog/B-01-new-title.md")
+        write(repo, "docs/backlog/B-01-another-task.md", item.format("Another", "Unrelated."))
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", "steal")
+        code, out = run("backlog_index.py", ["--against", "base"], repo)
+        expect("backlog_index --against: a different task under a taken number", code, 1, out)
+
+    # -- what an `**Automated:**` line names, and which lines count (SPEC 3.1) ------------------------
+    lines = """
+## 2. Business rules
+
+* A rule a test holds. **Automated:** `RuleTest`
+
+## 5. Scenarios
+
+### Scenario: two tests and a module
+* **Automated:** `e2e ScenarioTest`, `feature/x-data XDataTest`
+
+### Scenario: a test, where it lives, and a quotation
+* **Automated:** `app LoanTest` in `src/LoanTest.kt` - the case `a loan that is returned, late`
+
+### Scenario: a sentence for a name
+* **Automated:** `src/LoanTest.kt::a loan is refused while somebody waits`
+"""
+    with tempfile.TemporaryDirectory() as tree:
+        repos = os.path.join(tree, "repos")
+        write(repos, "app/e2e/src/ScenarioTest.kt", "class ScenarioTest\n")
+        write(repos, "app/feature/x-data/src/XDataTest.kt", "class XDataTest\n")
+        write(repos, "app/src/LoanTest.kt",
+              "class LoanTest {\n  fun `a loan is refused while somebody waits`() {}\n}\n")
+        write(repos, "app/src/RuleTest.kt", "class RuleTest\n")
+        write(tree, "docs/features/feature-x.md", doc("active", "src/LoanTest.kt", lines))
+        report, out = bdd(tree, repos)
+        if report is None:
+            failures.append("bdd_report printed no JSON\n" + out)
+        else:
+            refs = [(r["repo"], r["test"], r["needle"], r.get("found"))
+                    for d in report["documents"] for r in d.get("references", [])]
+            expect_true("bdd_report counted an `**Automated:**` line outside any scenario "
+                        "(wanted 3 of 3)", report["automated"] == 3 and report["total"] == 3, out)
+            expect_true("bdd_report did not read both tests of a comma-separated line, a module "
+                        "path as their repository, or found neither",
+                        refs[:2] == [("e2e", "ScenarioTest", "ScenarioTest", True),
+                                     ("feature/x-data", "XDataTest", "XDataTest", True)], out)
+            expect_true("bdd_report read a file path or a quotation as a test",
+                        refs[2:3] == [("app", "LoanTest", "LoanTest", True)], out)
+            expect_true("bdd_report did not take the whole sentence after `::` as the name",
+                        refs[3:] == [("", "src/LoanTest.kt::a loan is refused while somebody waits",
+                                      "a loan is refused while somebody waits", True)], out)
+
     if failures:
         sys.stderr.write("\n\n".join(failures) + "\n")
         return 1
     print("script_selftest: every case passed - absent subjects refused by the scripts and by the "
           "Makefile, the pin read once and never guessed, uncounted scenarios reported, a shipped "
-          "change without a version bump and a template pinning another release refused, and no "
-          "guard fires on the shape it allows")
+          "change without a version bump and a template pinning another release refused, reports "
+          "that cannot block the gate, anchors not looked for where they should not be, a renamed "
+          "item told from a stolen number, `**Automated:**` lines read as lists and counted only in "
+          "scenarios, and no guard fires on the shape it allows")
     return 0
 
 

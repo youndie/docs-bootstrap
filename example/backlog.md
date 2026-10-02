@@ -5,7 +5,7 @@
 > and everything that is not an item: the goal, the stages, and the decisions.
 >
 > New item: copy [`docs/templates/backlog-item.md`](docs/templates/backlog-item.md), take the next
-> free `B-NN`, and run `python3 ../scripts/backlog_index.py` after editing.
+> free `B-NN`, and run `make fix` (from docs-bootstrap's root, here) after editing.
 
 ## Goal
 

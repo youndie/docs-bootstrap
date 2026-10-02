@@ -120,10 +120,27 @@ The line names the test, optionally preceded by the repository it lives in:
 ```
 
 The repository is written only when the documentation covers more than one, and is the first of two
-whitespace-separated tokens; a single token is always the test. A reference of the form
-`path::name` or `path#name` is a locator rather than a name, so a tool looking for the test greps
-for the last segment — the file may be renamed while the function keeps its name. Backticks around
-either part are optional.
+whitespace-separated tokens; a single token is always the test. The repository may be a module path
+inside one (`feature/roaming-data`), because a repository of many modules is the ordinary shape. A
+reference of the form `path::name`, `path#name` or `TestClass.name` is a locator rather than a name,
+so a tool looking for the test greps for what follows the separator — the file may be renamed while
+the function keeps its name — and that name may contain spaces, as Kotlin and Spock test names do.
+Backticks around either part are optional.
+
+A scenario covered by several tests names them as a list, separated by commas, each reference in
+its own backticks. A dash or a semicolon ends the list, and what follows it is commentary for the
+reader; so is anything in parentheses.
+
+```markdown
+**Automated:** `e2e RoamingScenarioTest`, `feature/roaming-data RoamingPackageTest`
+**Automated:** `PurchaseSagaTest`, and against a moved clock `SuspendedSagaExpiryTest`
+**Automated:** `LoanRoutesTest` (on both targets) — the case `a renewal behind a hold is refused`
+```
+
+**The line belongs to a scenario.** Only an `**Automated:**` line between a `### Scenario:` heading
+and the next heading of level one, two or three says that scenario is automated. The same words in a
+business rule are a pointer for the reader, not a scenario, and are not counted — counted, they
+made one document report more automated scenarios than it has.
 
 **Exactly one tool counts this line.** In this repository that is `bdd_report.py`, which has to
 parse the line anyway in order to go looking for the test. A second counter is how two checks in
@@ -366,6 +383,11 @@ the fragment. This can report a false "found" — two files with the same name i
 but practically never a false "missing", and the job of the check is to catch rot.
 
 Paths in backticks that contain `*`, `{`, `<` or `>` are treated as patterns and skipped.
+
+**A `deprecated` document's anchors are not looked for.** Such a document describes behaviour that
+is gone and is kept for readers of old code (§6), so its paths say where something *was* and are
+expected to resolve to nothing. The checker names the documents it skipped instead of reporting
+their anchors as rot for as long as the document is kept.
 
 ### 4.1 Addresses inside something the tree does not hold
 

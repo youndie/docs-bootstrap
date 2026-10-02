@@ -195,6 +195,29 @@ def check_links(items_dir, files):
         sys.exit("broken links in backlog items:\n" + "\n".join(sorted(set(broken))))
 
 
+def renamed_from(ref, items_dir):
+    """
+    Which of our item files git considers a rename of one on `ref`, as {new name: old name}.
+
+    Only renames are asked for (`--diff-filter=R`), and only inside the items directory. A failure to
+    ask - no git, a ref that is not there - returns nothing, so the checks below stay as strict as
+    they were rather than falling open.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "diff", "--find-renames", "--diff-filter=R", "--name-status", ref, "--", "."],
+            cwd=items_dir, capture_output=True, text=True, check=True,
+        ).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return {}
+    pairs = {}
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) == 3 and parts[0].startswith("R"):
+            pairs[os.path.basename(parts[2])] = os.path.basename(parts[1])
+    return pairs
+
+
 def check_against(ref, items_dir):
     """
     Catches a number that is already taken: an id that was free when the branch was cut but has
@@ -208,7 +231,16 @@ def check_against(ref, items_dir):
     The comparison is by file name rather than by frontmatter: the same number under a different
     slug is exactly what "the number is taken" means, and `id` matching the file name is verified
     separately in parse().
+
+    **Except when this branch renamed the file**, which looks identical from here — the same number,
+    a different slug on each side — and is the opposite situation: nobody took anything, the item
+    was re-titled. Git's own rename detection is what tells the two apart, and nothing else can: a
+    branch that stole a number and a branch that renamed a file both lack the other side's file
+    name. The same holds for the slug check below, where a renumbering this branch made is a rename
+    too. Found when re-titling an item made this check report a stolen number against the item's
+    own history.
     """
+    renames = renamed_from(ref, items_dir)
     try:
         out = subprocess.run(
             ["git", "ls-tree", "-r", "--name-only", ref, "--", "."],
@@ -231,7 +263,7 @@ def check_against(ref, items_dir):
     for name in ours:
         num = re.match(r"^(B-\d+)-", name).group(1)
         other = theirs.get(num)
-        if other and other != name:
+        if other and other != name and renames.get(name) != other:
             taken.append("  {0}: here {1}, on {2} already {3}".format(num, name, ref, other))
     if taken:
         sys.exit("this number is already taken on {0} - take a free one and rename the file:\n"
@@ -244,7 +276,7 @@ def check_against(ref, items_dir):
     for name in ours:
         slug = name.split("-", 2)[2]
         other = their_slugs.get(slug)
-        if other and other != name:
+        if other and other != name and renames.get(name) != other:
             renamed.append("  {0}: here {1}, on {2} already {3}".format(slug, name, ref, other))
     if renamed:
         sys.exit("this task already exists on {0} under a different number - take the number from "
@@ -356,7 +388,10 @@ def main():
 
     if args.check:
         if updated != text:
-            sys.exit("the index in {0} is stale - run scripts/backlog_index.py"
+            # Named as a consumer runs it: `make fix` is the target its Makefile maps onto this
+            # script at the pinned version, and the path of a copy is the fallback.
+            sys.exit("the index in {0} is stale - regenerate it with `make fix` (where the checks "
+                     "are copied in: python3 scripts/backlog_index.py) and commit it"
                      .format(os.path.basename(index_path)))
         print("index is up to date: {0} items".format(len(items)))
         return 0
