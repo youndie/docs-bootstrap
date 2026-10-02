@@ -380,7 +380,17 @@ this frontmatter. Edit the item, run the generator, commit both.
 ## 4. Code anchors
 
 Every document must contain at least one path into the code. This is the one structural rule the
-checker enforces, and it is what the whole format exists for.
+checker enforces, and it is what the whole format exists for. Missing, it is the `no-code-anchor`
+error (a warning on research, which may predate the code, §3.5).
+
+An address (§4.1) satisfies the rule the same as a path does: a document whose code lives entirely in
+another repository writes every path as `owner/repo@<sha>!/…`, as this section asks, and must not
+have to add a path of its own repository that it does not need. The left side has to name something
+fetchable — `Ktor!/…` or a placeholder is not a way into the code and does not count. The ref is not
+asked about: an address at a branch, at no ref, or at a snapshot still reaches the code in one hop,
+and whether it reaches the code that was read is the anchors report's question, answered in its own
+section that does not fail `--check` (§4.1). Refusing it here would make that section blocking by
+another road.
 
 Anchors appear in a table whose first column names the service (or the kind of file) and whose
 second column holds paths in backticks:
@@ -517,7 +527,8 @@ A tool that reads this format:
 * **must** skip `docs/templates/` — the placeholders there are not documents;
 * **must not** enforce section structure. Documents legitimately deviate: a feature that is mostly
   a reality check has no business-rules section, and that is a style, not a defect. What is checked
-  instead is the substance of the rule — that at least one path into the code is present;
+  instead is the substance of the rule — that at least one path into the code, or an address
+  (§4.1), is present;
 * **must not** silently rewrite a hand-written document. A generator that finds a discrepancy
   between the code and a document reports it. The invariant above only holds while the person
   responsible for the meaning owns the text.

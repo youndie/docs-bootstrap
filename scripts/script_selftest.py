@@ -655,6 +655,62 @@ def main():
         errors, out = no_anchor_errors(tree)
         expect_true("docs_check accepted a document with no anchor at all", bool(errors), out)
 
+    # An address (SPEC 4.1) is a path into the code. Through 0.3.9 it was not one to docs_check: a
+    # service document whose code lives entirely in another repository, with every path written as
+    # `owner/repo@<sha>!/...` as SPEC 4 asks, failed with no-code-anchor. An address at a ref that
+    # moves counts as well - code_anchors lists it apart, without failing --check, and docs_check must
+    # not make that list blocking by another road. An address nobody can fetch does not count, and
+    # neither does a repository named with no path inside it. Each document carries one candidate
+    # and nothing else, and code_anchors reads the same tree, so the two scripts are held to one
+    # answer on what an address is.
+    with tempfile.TemporaryDirectory() as tree:
+        cases = {
+            "youndie/petich@bfff0b6!/petich-chronik/src/commonMain/kotlin/": True,
+            "kubernetes/website@v1.31!/content/en/docs/pod-lifecycle.md": True,
+            "io.github.smyrgeorge:sqlx4k:1.13.0!/commonMain/.../ConnectionPool.kt": True,
+            "ktor-server-core-3.5.2.klib!/commonMain/io/ktor/server/engine/ShutdownHook.kt:40-52": True,
+            "youndie/petich!/petich-core/src/commonMain/kotlin/Petich.kt": True,
+            "youndie/petich@main!/petich-core/src/commonMain/kotlin/Petich.kt": True,
+            "com.example:lib:1.0-SNAPSHOT!/src/X.kt": True,
+            "Ktor!/commonMain/io/ktor/server/engine/ShutdownHook.kt": False,
+            "<artefact>!/<path>": False,
+            "youndie/petich@bfff0b6": False,
+        }
+        write(tree, "app/src/x.py", "x = 1\n")    # a tree for code_anchors to stand on
+        names = {}
+        for i, address in enumerate(cases):
+            names["feature-{0}".format(i)] = address
+            write(tree, "docs/features/feature-{0}.md".format(i), doc("active", address).replace(
+                "id: feature-x", "id: feature-{0}".format(i)))
+        errors, out = no_anchor_errors(tree)
+        refused = {os.path.basename(e["file"])[:-3] for e in errors or []}
+        counted = dict((names[n], n not in refused) for n in names)
+        expect_true("docs_check did not take an address with a fetchable left side, pinned or not, "
+                    "for a path into the code, and only that: {0}".format(sorted(
+                        (a, counted[a], want) for a, want in cases.items() if counted[a] != want)),
+                    errors is not None and counted == cases, out)
+        expect_true("docs_check did not say which address it could not count",
+                    any("'Ktor'" in e["message"] for e in errors or []), out)
+        code, report, out = anchors(tree, ".")
+        resolved = dict((a["path"], a["status"]) for a in (report or {}).get("anchors", []))
+        disagree = sorted(a for a, want in cases.items()
+                          if "!/" in a and (resolved.get(a) in ("external", "unpinned")) != want)
+        expect_true("docs_check and code_anchors disagree on what an address is: {0}".format(disagree),
+                    report is not None and not disagree, out)
+
+    # The two copies of the pattern for a fetchable left side: each script runs on its own, so the
+    # pattern is not imported, and two copies drift unless something compares them.
+    def pattern(script, name):
+        text = open(os.path.join(SCRIPTS, script), encoding="utf-8").read()
+        m = re.search(r"^{0} = re\.compile\(\n?(.*?)\n?\)\n".format(name), text, re.M | re.S)
+        return re.sub(r"\s*#[^\n]*", "", m.group(1)).split() if m else None
+
+    expect_true("FETCHABLE in docs_check.py is not the one in code_anchors.py",
+                pattern("docs_check.py", "FETCHABLE") is not None
+                and pattern("docs_check.py", "FETCHABLE") == pattern("code_anchors.py", "FETCHABLE"),
+                "docs_check:    {0}\ncode_anchors: {1}".format(
+                    pattern("docs_check.py", "FETCHABLE"), pattern("code_anchors.py", "FETCHABLE")))
+
     # An anchor is looked for in ITS repository. Matched against every sibling, `a/x.md` - repository
     # `a`, not checked out here - resolved to `b`'s x.md once its first segment was cut off, and a
     # path missing from the documented repository was "found" in whichever sibling had it.
@@ -1032,7 +1088,8 @@ A scenario with an `**Automated:**` line names its test; this sentence is about 
           "that cannot block the gate, anchors not looked for where they should not be, anchors "
           "citing lines looked for and anchors found only in their own repository, `./` read as "
           "the root and `../` as leaving it, addresses at a branch or at no ref, snapshots, dynamic "
-          "versions and unversioned files told from pinned ones without failing --check, a "
+          "versions and unversioned files told from pinned ones without failing --check, an "
+          "address with a fetchable left side taken for a path into the code, a "
           "renamed item told from a stolen number, `**Automated:**` lines read as lists and "
           "counted only in scenarios, a line naming a file - by its path or by its name alone - checked "
           "for the file, a test name looked for the same way with git and without, and no guard "
