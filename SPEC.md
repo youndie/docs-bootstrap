@@ -125,7 +125,9 @@ inside one (`feature/roaming-data`), because a repository of many modules is the
 reference of the form `path::name`, `path#name` or `TestClass.name` is a locator rather than a name,
 so a tool looking for the test greps for what follows the separator — the file may be renamed while
 the function keeps its name — and that name may contain spaces, as Kotlin and Spock test names do.
-Backticks around either part are optional.
+Backticks around either part are optional. A name is looked for as a whole word in the files of the
+repository that are not Markdown, and the answer does not depend on whether the repository is a git
+checkout or a directory that is walked: the same name, matched the same way.
 
 A check that is not a test function — a conformance script, a `run.sh` that drives the binary, the
 `Main.kt` of a harness — is named by its path, with nothing after `::` or `#`:
@@ -140,9 +142,18 @@ range inside the file — and a repository written before it means the path is i
 path with no extension, which the anchor check would not take for one (`samples/oracle`), is looked
 for as text, like a test name.
 
+A file name with no directory — `negative-control.sh`, `LoanRoutesTest.kt`, optionally with a line or
+a range — is a path too, and is looked for as a file of that name: in the reference's own repository
+as §4 finds a path by its suffix, or anywhere inside the repository or module written before it. It
+is told from `TestClass.name` by its extension, which has to be one that a test, a script or a
+check's data is given (`.kt`, `.py`, `.sh`, `.redis`, `.yaml`, …). An extension that is also a
+plausible member name (`json`, `patch`, `html`) is not on that list, so `LoanTest.renew` and
+`Serializer.json` are a class and its member, looked for by the member's name.
+
 A scenario covered by several tests names them as a list, separated by commas, each reference in
 its own backticks. A dash or a semicolon ends the list, and what follows it is commentary for the
-reader; so is anything in parentheses.
+reader; so is anything in parentheses. After the first reference, a path or a file name inside a
+sentence says where a test lives or what it reads, and is not a reference of its own.
 
 ```markdown
 **Automated:** `e2e RoamingScenarioTest`, `feature/roaming-data RoamingPackageTest`
