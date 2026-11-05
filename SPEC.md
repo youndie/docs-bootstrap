@@ -454,7 +454,7 @@ and a file that went is still missing:
   a type name with two capitals or more, because `deploy/Dockerfile` has the same shape with one.
 
 What the shape cannot tell from a path is left to the writer, in a form that says what it is. A JVM
-frame or member is written dotted, `bench.Pricing.quote` — `Pricing.quote` and `Pricing.kt` differ
+frame or member is written dotted, `bench.Pricing.quote` (§4.2) — `Pricing.quote` and `Pricing.kt` differ
 by nothing a pattern can hold. A section of somebody's specification is an address into it (§4.1)
 or prose. A directory of an installed runtime, image or toolchain carries its root —
 `$JAVA_HOME/jmods`, `<image>/bin/` — and a URL segment its host or slash, `/tree/<ref>`. One
@@ -512,6 +512,44 @@ numbered once and never published again, such as `0.1.0.<run>`, is a version.
 
 The rule this serves is the same one §4 opens with: an anchor exists so the reader reaches the thing
 in one hop. `ktor-server-core-3.5.2.klib!/…` is one hop. A bare path that no tree contains is none.
+
+### 4.2 Members of a type
+
+A member written dotted in backticks is a reference too: `OrderSummary.checkoutEnabled`,
+`CartCommand.ChangeLine`, `PaymentProcessor.capture()`. A path cannot catch one going: rename the
+field and the file stays where it was, the anchors table still resolves, and the document goes on
+naming the old field.
+
+The checker resolves `Type.member` by finding a declaration of `Type` in a source file and, in the
+same file, a declaration of `member` — a `val`, `var`, `fun` or the like, a nested type, an enum entry,
+a constructor parameter — or an extension of `Type` in any file. It is a grep and not a parser, with the
+bias of §4: same-named members of another class in that file count, so a false "found" is possible.
+A miss is reported as missing and fails `--check`, like a path.
+
+**Looked for only where the type resolves, and only in living documents.** Not looked for:
+
+* a type this code does not declare — `Pricing.quote` with no `Pricing` is somebody else's API or
+  prose, not rot; a `private` type counts as not declared, since no document's reader can name it;
+* a file name — `CartScreen.kt`, `Chart.yaml`, by a known tail or by a file of that name in the tree;
+* a backlog item that is `done` or `dropped`, which describes the code at the time, and a `deprecated`
+  document (§6). An item in any other status is looked in, for members only: its paths are not anchors,
+  because a plan names files it will create.
+
+**What the grep cannot know, the writer says in the reference:**
+
+| The sentence means | Write |
+|---|---|
+| the member is gone | struck through: ~~`Footer.appTitle`~~ |
+| another library's type of the same name | its package first: `org.apache.kafka.clients.producer.ProducerConfig.configDef()` — this code's type only if the file's `package` line or path says so |
+| a member declared on a supertype | the type that declares it: `CrudRepository.save` |
+| a member that does not exist yet | the member on its own, beside the type: `discount` on `OrderSummary` |
+
+A struck reference whose member is still declared is reported found: the strike is a claim about the
+past, and the check does not hold a sentence to it.
+
+Supertypes are not followed. A class that implements a library's interface could inherit anything,
+so treating it as "may declare this" hides a renamed field on every wire type there is, and that is
+what the check is for.
 
 ---
 
