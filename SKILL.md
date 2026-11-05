@@ -184,6 +184,12 @@ a `-SNAPSHOT` coordinate, or a file with no version in its name (`x.jar`). [SPEC
 A document marked `status: deprecated` keeps its anchors as a record of where the behaviour was;
 the checker skips them and says so ([SPEC §4](SPEC.md)).
 
+A member written `Type.member` is resolved too: where `Type` is declared in the code, `member` has
+to be declared in the same file, or the reference is reported missing. That is what catches a field
+renamed under a document whose anchors table still resolves. A member the sentence says is gone is
+struck through, ~~`Footer.appTitle`~~; another library's type of the same name leads with its
+package; a backlog item that is `done` or `dropped` is not looked in ([SPEC §4.2](SPEC.md)).
+
 An anchor resolves in its own repository only — the one its first segment names, else its service's,
 else the one the documentation lives in — so a path into another repository starts with that
 repository's name, or is an address when the checker will not have a clone of it. `./x` is `x`; a

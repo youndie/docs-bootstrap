@@ -110,6 +110,34 @@ address into it or prose; a directory of an installed runtime or toolchain carri
 segment is the weakest anchor there is: `runtime/` is found in any package called runtime, whatever
 the sentence meant, so a directory of the code is written with enough of its path to be its own.
 
+MEMBERS OF A TYPE (SPEC 4.2). The other kind of reference the documents are full of, `OrderSummary.checkoutEnabled`,
+`CartCommand.ChangeLine`, `PaymentProcessor.capture()`, names nothing a path could. Rename the field and
+the file stays where it was, so the anchors table still resolves and the document goes on naming the
+old field. Each such reference is resolved by finding a declaration of the type and, in the same file,
+a declaration of the member: `val`/`var`/`fun` and the like, a nested type, an enum entry, a constructor
+parameter. An extension (`fun Type.member`) counts from any file. This is a grep over source files and
+not a parser, with the bias of the suffix match: a false "found" is the price (a same-named member of
+another class in that file), and comment lines are left out so that a KDoc still saying `[old]` declares
+nothing.
+
+Four things are not looked for, each counted in the report:
+
+    Pricing.quote            the type is not declared here: somebody else's API, or prose
+    CartScreen.kt            a file name, by its tail or by a file of that name in the tree
+    B-14, status: done       a done or dropped backlog item describes the code at the time (SPEC 3.6)
+    ~~`Footer.appTitle`~~    the sentence says the member is gone, and the reference is struck to say so
+
+Rot is the point and history is not, so a miss fails --check as a path does. What keeps that from
+being a false alarm is that the writer has a form for each thing the grep cannot know. Gone: struck
+through, which is also what a reader should see; a struck member that is still declared is reported
+found. Somebody else's type of the same name: lead with its package, `org.apache.kafka.Type.member`,
+which is only this code's type if the `package` line or the path says so. A `private` type is not
+indexed at all, so a test's `private class Files` does not take the name from the JDK's. Declared on a
+supertype, or not built yet: name the type that declares it, or the member on its own. Supertypes are
+not followed: over 26 repositories and 592 references found, following the ones in the code changed
+nothing, and treating one out of the code as "may declare anything" hid every wire type that implements
+an interface of a library, which is what the check is for.
+
 WITHOUT --repos THE SCRIPT ASSERTS NOTHING. "Not checked" and "no violations" are different
 statements; the first one is printed explicitly.
 
@@ -217,6 +245,46 @@ IGNORED_DIRS = {".git", ".hg", ".svn", "node_modules", "build", "dist", "out", "
 
 # `status: deprecated` in the frontmatter - see the module docstring.
 DEPRECATED = re.compile(r"^status:\s*[\"']?deprecated[\"']?\s*(?:#.*)?$", re.M)
+
+# A member of a type in backticks - see the module docstring. A package may lead (`bench.Pricing.quote`)
+# and an argument list trail (`Pricing.quote(cart)`); two tildes around it say the member is gone.
+MEMBER_RE = re.compile(r"(~~)?`((?:[a-z_][a-z0-9_]*\.)*[A-Z][A-Za-z0-9_]*"
+                       r"(?:\.[A-Za-z_][A-Za-z0-9_]*)+)(?:\([^`]*\))?`(~~)?")
+# A backlog item that is done or dropped describes the code at the time - see the module docstring.
+HISTORY = re.compile(r"^status:\s*[\"']?(?:done|dropped)[\"']?\s*(?:#.*)?$", re.M)
+# What is read for declarations. Anything else - documents, data, images - declares no member.
+SOURCE_EXT = {".kt", ".kts", ".java", ".scala", ".groovy", ".py", ".ts", ".tsx", ".js", ".jsx", ".mjs",
+              ".go", ".rs", ".swift", ".cs", ".c", ".h", ".cc", ".cpp", ".hpp", ".m", ".mm", ".rb",
+              ".php", ".dart"}
+SOURCE_LIMIT = 2 * 1024 * 1024
+# The tail of a file name, `CartScreen.kt`: the shape of a member, told apart by the tail or, for a
+# tail not listed here, by a file of that name in the tree.
+FILE_TAIL = {t[1:] for t in SOURCE_EXT} | {
+    "md", "txt", "json", "yaml", "yml", "toml", "xml", "html", "css", "svg", "png", "jpg", "jpeg",
+    "gif", "webp", "pdf", "csv", "sql", "sh", "bat", "gradle", "properties", "cfg", "ini", "jar",
+    "klib", "aar", "zip", "tar", "gz", "proto", "patch", "diff", "plist", "xcconfig", "ttf", "otf",
+    "wasm", "dylib", "dll", "exe"}
+# A whole line of comment. A KDoc that still says [photoLabel] declares nothing, and neither does the
+# word "class" in a sentence.
+COMMENT_LINE = re.compile(r"^[ \t]*(?:\*|/\*|//|#).*$", re.M)
+# A declaration of a type: the keyword is the first thing on its line but for modifiers. `private` is
+# not one of them, so a type only its own file can name - a test's `private class Files` - does not
+# take the name from the `Files` of the JDK that the documents mean.
+TYPE_DECL = re.compile(
+    r"^[ \t]*(?:(?:public|protected|internal|abstract|open|final|sealed|data|value|inline|inner|enum"
+    r"|annotation|fun|static|expect|actual|export|default|declare|const|pub(?:\(\w+\))?|partial|case"
+    r"|implicit|companion|@\w+(?:\([^)\n]*\))?)\s+)*"
+    r"(?:class|interface|object|enum|struct|trait|protocol|record|typealias|type|impl|extension|union)"
+    r"\s+(?:class\s+)?([A-Z][A-Za-z0-9_]*)", re.M)
+# In Python only `class X:` declares one: `public class Producer {` there is Java in a string.
+PY_TYPE_DECL = re.compile(r"^[ \t]*class\s+([A-Z][A-Za-z0-9_]*)\s*[:(]", re.M)
+# `fun Type.member` and `func (t *Type) member` declare a member of a type from any file.
+OUTSIDE_DECL = re.compile(r"\b(?:fun|val|var)\s+(?:<[^>\n]*>\s*)?([A-Z][A-Za-z0-9_]*)(?:<[^>\n]*>)?\??\."
+                          r"`?([A-Za-z_][A-Za-z0-9_]*)"
+                          r"|\bfunc\s+\(\w+\s+\*?([A-Z][A-Za-z0-9_]*)\)\s+([A-Za-z_][A-Za-z0-9_]*)")
+# What the language declares for the writer, so that no declaration can be found for it.
+IMPLICIT_MEMBERS = {"Companion", "entries", "values", "valueOf", "copy", "serializer", "class", "name",
+                    "ordinal", "toString", "hashCode", "equals"}
 
 
 def _utf8_stdout():
@@ -701,6 +769,133 @@ def _missing(p, trees):
     return {"status": "missing"}
 
 
+def collect_members(root, history=None):
+    """The `Type.member` references of every document, the backlog's items beside the layers.
+
+    What is not looked in is left out and, when `history` is a list, named in it: a deprecated document
+    and a backlog item that is done or dropped. A reference is taken once per document.
+    """
+    refs = []
+    for folder in FOLDERS + ("backlog",):
+        path = os.path.join(root, folder)
+        if not os.path.isdir(path):
+            continue
+        for name in sorted(os.listdir(path)):
+            if not name.endswith(".md") or name == "README.md":
+                continue
+            doc = "{0}/{1}".format(folder, name)
+            with open(os.path.join(path, name), encoding="utf-8") as fh:
+                text = fh.read()
+            front = text.split("---", 2)
+            if is_deprecated(text) or (folder == "backlog" and len(front) >= 3
+                                       and HISTORY.search(front[1])):
+                if history is not None:
+                    history.append(doc)
+                continue
+            seen = set()
+            for before, ref, after in MEMBER_RE.findall(text):
+                removed = bool(before and after)
+                if (ref, removed) not in seen:
+                    seen.add((ref, removed))
+                    refs.append({"doc": doc, "ref": ref, "removed": removed})
+    return refs
+
+
+def member_trees(trees, svc2repo, own, single):
+    """Where a member is declared: the repository the documentation lives in and the ones its service
+    documents name; every tree when the trees are one repository's modules, or when neither is known."""
+    if own and not single:
+        return sorted({own} | {r for r in svc2repo.values() if r in trees})
+    return sorted(trees)
+
+
+def source_index(trees, names):
+    """Type name -> the source files declaring it, type name -> the members declared on it from
+    outside, every source file's text without its comment lines, and every file's name."""
+    index = {"types": {}, "outside": {}, "text": {}, "names": set()}
+    for repo in names:
+        tree = trees[repo]
+        index["names"] |= {f.rsplit("/", 1)[-1] for f in tree["files"]}
+        for f in tree["files"]:
+            if os.path.splitext(f)[1] not in SOURCE_EXT:
+                continue
+            path = os.path.join(tree["root"], f)
+            try:
+                if os.path.getsize(path) > SOURCE_LIMIT:
+                    continue
+                with open(path, encoding="utf-8", errors="replace") as fh:
+                    text = COMMENT_LINE.sub("", fh.read())
+            except OSError:
+                continue
+            key = (repo, f)
+            index["text"][key] = text
+            for name in set((PY_TYPE_DECL if f.endswith(".py") else TYPE_DECL).findall(text)):
+                index["types"].setdefault(name, []).append(key)
+            for a, b, c, d in OUTSIDE_DECL.findall(text):
+                index["outside"].setdefault(a or c, set()).add(b or d)
+    return index
+
+
+def _member_decl(member):
+    """A declaration of `member`, read from what stands around the name. One alternative per way of
+    declaring one; each may take a line that is not a declaration, which costs a false "found"."""
+    w = "`?" + re.escape(member) + "`?(?![A-Za-z0-9_])"
+    return re.compile(
+        r"\b(?:val|var|let|const|fun|func|fn|def|class|object|interface|enum|struct|trait|type"
+        r"|typealias|protocol|case)\s+(?:<[^>\n]*>\s*)?(?:[\w.<>?,* ]+\.)?" + w +   # by keyword
+        r"|(?:^|[\s(,{])" + w + r"\s*\??:(?!:)"                  # a constructor parameter, name: type
+        r"|^[ \t]*(?:@[\w.]+(?:\([^)\n]*\))?\s+)*" + w +         # first on its line: an enum entry
+        r"|[{,(]\s*" + w + r"\s*[,;})(]"                         # an entry of a one-line enum
+        r"|[\w>\]?*&]\s+" + w + r"\s*[;=({]"                     # int member; void member()
+        r"|\b(?:self|this)\." + w + r"\s*=",                     # set in a constructor
+        re.M)
+
+
+def _in_package(key, package, text):
+    """Does the file sit in the package the reference leads with, by its `package` line or its path?"""
+    declared = re.search(r"^[ \t]*package\s+([\w.]+)", text, re.M)
+    if declared and (declared.group(1) == package or declared.group(1).endswith("." + package)):
+        return True
+    return "/{0}/".format(package.replace(".", "/")) in "/" + key[1]
+
+
+def resolve_member(ref, index):
+    """found, missing or removed; foreign when the type is not in this code; skipped when this is a
+    file name - see the module docstring."""
+    segments = ref["ref"].split(".")
+    package = []
+    while segments[0][0].islower():
+        package.append(segments.pop(0))
+    if segments[-1] in FILE_TAIL or ref["ref"] in index["names"]:
+        return {"status": "skipped", "why": "a file name, not a member"}
+    owner = segments[0]
+    keys = index["types"].get(owner, [])
+    if package:
+        keys = [k for k in keys if _in_package(k, ".".join(package), index["text"][k])]
+    if not keys:
+        return {"status": "foreign", "why": "{0} is not declared in this code".format(
+            ".".join(package + [owner]))}
+    at = None
+    for member in segments[1:]:
+        decl = _member_decl(member)
+        at = next((k for k in keys if decl.search(index["text"][k])), None)
+        if at is None and member not in IMPLICIT_MEMBERS and member not in index["outside"].get(owner, ()):
+            if ref["removed"]:
+                return {"status": "removed"}
+            return {"status": "missing", "why": "{0} is not declared where {1} is: {2}".format(
+                member, owner, ", ".join("{0}/{1}".format(*k) for k in sorted(keys)[:3]))}
+        # A nested type goes on in the file it was found in. A property does not: what follows it is
+        # declared on its type, wherever that is.
+        if at is None or not re.search(r"\b(?:class|interface|object|enum|struct|trait)\s+(?:class\s+)?"
+                                       + re.escape(member) + r"\b", index["text"][at]):
+            break
+        owner, keys = member, [at]
+    found = {"status": "found"}
+    if at:
+        found.update(repo=at[0], at=at[1])
+    return found
+
+
 def context(docs_root, repos_root):
     """What resolve() needs besides the anchor: the trees under `repos_root`, service id ->
     repository, the tree the documentation lives in ("" if none), and whether the trees are the
@@ -746,7 +941,8 @@ def main():
     deprecated = []
     anchors = collect_anchors(root, deprecated)
     if not args.repos:
-        print("Anchors in the documentation: {0}".format(len(anchors)))
+        print("Anchors in the documentation: {0}, member references: {1}".format(
+            len(anchors), len(collect_members(root))))
         print("Their existence was NOT checked: --repos was not given. "
               "That is not the same as \"they are all there\".")
         return 0
@@ -766,11 +962,22 @@ def main():
     for a in anchors:
         a.update(resolve(a, trees, svc2repo, own, single))
 
+    history = []
+    members = collect_members(root, history)
+    if members:
+        index = source_index(trees, member_trees(trees, svc2repo, own, single))
+        for m in members:
+            m.update(resolve_member(m, index))
+
     missing = [a for a in anchors if a["status"] == "missing"]
     skipped = [a for a in anchors if a["status"] == "skipped"]
     found = [a for a in anchors if a["status"] == "found"]
     external = [a for a in anchors if a["status"] == "external"]
     unpinned = [a for a in anchors if a["status"] == "unpinned"]
+
+    gone = [m for m in members if m["status"] == "missing"]
+    member_counts = dict((s, sum(1 for m in members if m["status"] == s))
+                         for s in ("found", "missing", "removed", "foreign", "skipped"))
 
     # --check asks about rot, and an address at a moving ref is not rot - see the module docstring.
     if args.json:
@@ -778,14 +985,20 @@ def main():
                           "missing": len(missing), "skipped": len(skipped),
                           "external": len(external), "unpinned": len(unpinned),
                           "deprecated_documents": deprecated,
-                          "repos": sorted(trees), "anchors": anchors},
+                          "repos": sorted(trees), "anchors": anchors,
+                          "member_counts": member_counts, "members": members,
+                          "history_documents": history},
                          ensure_ascii=False, indent=2))
-        return 1 if (missing and args.check) else 0
+        return 1 if ((missing or gone) and args.check) else 0
 
     print("Repositories: {0}".format(", ".join(sorted(trees))))
     print("Anchors: {0} - found {1}, not found {2}, inside artefacts {3}, at a ref that moves {4}, "
-          "skipped {5}\n".format(len(anchors), len(found), len(missing), len(external),
-                                 len(unpinned), len(skipped)))
+          "skipped {5}".format(len(anchors), len(found), len(missing), len(external),
+                               len(unpinned), len(skipped)))
+    print("Member references: {0} - found {1}, not found {2}, named as removed {3}, type not in this "
+          "code {4}, file names {5}\n".format(len(members), member_counts["found"],
+                                              member_counts["missing"], member_counts["removed"],
+                                              member_counts["foreign"], member_counts["skipped"]))
 
     if missing:
         by_doc = {}
@@ -805,6 +1018,22 @@ def main():
                     print("          seen at: {0}".format(at))
                 for at in a.get("moved_to", []):
                     print("          possibly now: {0}/{1}".format(a["moved_repo"], at))
+        print()
+    if gone:
+        by_doc = {}
+        for m in gone:
+            by_doc.setdefault(m["doc"], []).append(m)
+        print("MEMBER NOT FOUND")
+        print("-" * 72)
+        print("  The type is in the code and this member of it is not. If the sentence says it is gone,")
+        print("  strike the reference: ~~`Type.member`~~. If it means somebody else's type of the same")
+        print("  name, lead with the package: `org.example.Type.member`. If a supertype declares it, or")
+        print("  it does not exist yet, name that type, or the member on its own.")
+        for doc in sorted(by_doc):
+            print("  {0}".format(doc))
+            for m in by_doc[doc]:
+                print("      {0}".format(m["ref"]))
+                print("          {0}".format(m["why"]))
         print()
     if external:
         by_doc = {}
@@ -842,10 +1071,18 @@ def main():
     if deprecated:
         print("Not looked in - status: deprecated, the anchors say where the behaviour was: {0}\n"
               .format(", ".join(deprecated)))
+    if history:
+        print("Not looked in for members - deprecated, or a backlog item done or dropped, which "
+              "describes the code at the time: {0} document(s)\n".format(len(history)))
 
+    if gone:
+        print("Members not found: {0}. A field gets renamed and the file it was in stays where it is, "
+              "so no path notices.".format(len(gone)))
     if missing:
         print("Rotten anchors: {0}. A path in another repository gets renamed without anyone "
               "looking into the documentation.".format(len(missing)))
+        return 1 if args.check else 0
+    if gone:
         return 1 if args.check else 0
     if unpinned:
         print("Every anchor resolves; {0} address(es) at a ref that moves, listed above."

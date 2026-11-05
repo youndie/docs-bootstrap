@@ -833,6 +833,189 @@ def main():
                     status == {"app/src/live.py": "found", "server/build/libs/": "skipped",
                                "features/": "skipped", "api/": "found", "bin/": "missing"}, out)
 
+    # -- members of a type (SPEC 4.2) ------------------------------------------------------------------
+    # A renamed field left the anchors table resolving and the document naming the old field, and
+    # nothing looked. Held from both sides: every way of declaring a member is found, a member that
+    # went is missing even with a comment still naming it and a use of it left, and what is not a
+    # member, not this code's, or not a living document is not reported.
+    members = {
+        # found: each way of declaring one
+        "OrderSummary.total": "found", "OrderSummary.note": "found", "CartCommand.ChangeLine": "found",
+        "CartCommand.ChangeLine.qty": "found", "CartCommand.Clear": "found", "Status.Open": "found",
+        "Status.CLOSED": "found", "Phase.SECOND": "found", "PaymentProcessor.capture": "found",
+        "PaymentProcessor.retries": "found", "PaymentProcessor.LIMIT": "found",
+        "PaymentProcessor.computed": "found", "loans.Loan.renew": "found",
+        "PaymentProcessor.refund": "found", "PaymentProcessor.Companion": "found",
+        "OrderSummary.copy": "found", "OrderSummary.config.port": "found",
+        "shop.order.OrderSummary.total": "found", "order.OrderSummary.total": "found",
+        "Loan.renew": "found", "Loan.state": "found", "Legacy.size": "found", "Legacy.close": "found",
+        "Client.Send": "found", "Client.Timeout": "found", "Client.Retry": "found",
+        # missing: what the check is for
+        "OrderSummary.checkoutEnabled": "missing", "CartCommand.Gone": "missing",
+        "CartCommand.ChangeLine.gone": "missing", "Phase.THIRD": "missing",
+        "PaymentProcessor.charge": "missing", "PaymentProcessor.Inherited": "missing",
+        "Loan.close": "missing", "Client.Gone": "missing", "shop.order.OrderSummary.gone": "missing",
+        # foreign: not this code's
+        "Pricing.quote": "foreign", "Files.move": "foreign", "other.pkg.OrderSummary.total": "foreign",
+        "Producer.send": "foreign", "Word.anything": "foreign",
+        # skipped: not a member
+        "CartScreen.kt": "skipped", "PaymentProcessor.md": "skipped", "OrderSummary.jvm.kt": "skipped",
+        "Status.weird": "skipped",
+    }
+    kotlin = """package shop.order
+
+/**
+ * checkoutEnabled: this name went, and a comment declares nothing.
+ */
+data class OrderSummary(val total: Int, note: String, val config: Config)
+
+// the class Word, in a sentence
+sealed interface CartCommand : ExternalKey {
+    data class ChangeLine(val qty: Int) : CartCommand
+    data object Clear : CartCommand
+}
+
+enum class Status { Open, CLOSED }
+
+enum class Phase {
+    FIRST,
+    SECOND(2),
+}
+
+class PaymentProcessor : ExternalBase() {
+    fun capture(amount: Int) = amount
+    val retries = 3
+    val computed by lazy { 1 }
+    companion object { const val LIMIT = 1 }
+    fun use(s: OrderSummary) = s.checkoutEnabled
+}
+
+private class Files { fun mine() = 1 }
+"""
+    python = """class Loan:
+    def __init__(self):
+        self.state = 1
+    def renew(self):
+        pass
+
+FIXTURE = '''
+public class Producer {
+    public void send() {}
+}
+'''
+"""
+    java = "public class Legacy {\n    private int size;\n    public void close() {}\n}\n"
+    golang = ("type Client struct {\n\tTimeout int\n}\n\nfunc (c *Client) Send() {}\n"
+              "func (c *Client) Retry() {}\n")
+    with tempfile.TemporaryDirectory() as tree:
+        write(tree, "app/src/order.kt", kotlin)
+        write(tree, "app/src/refund.kt", "fun PaymentProcessor.refund(): Int = 1\nclass CartScreen\n")
+        write(tree, "app/src/loans/loan.py", python)
+        write(tree, "app/src/Legacy.java", java)
+        write(tree, "app/src/client.go", golang)
+        write(tree, "app/assets/Status.weird", "x\n")
+        cites = "".join("* `{0}`\n".format(m) for m in members)
+        write(tree, "docs/features/feature-x.md", doc("active", "app/src/order.kt", "\n" + cites))
+        code, report, out = anchors(tree, ".", "--check")
+        status = dict((m["ref"], m["status"]) for m in (report or {}).get("members", []))
+        expect_true("code_anchors told a member from what is not one wrongly: {0}".format(sorted(
+            (m, status.get(m), s) for m, s in members.items() if status.get(m) != s)),
+            status == members, out)
+        expect("code_anchors --check with a member that went", code, 1, out)
+        expect_true("code_anchors counted a member as a path, or did not count the members",
+                    report is not None and report["missing"] == 0
+                    and report.get("member_counts", {}).get("missing") == 9
+                    and report.get("member_counts", {}).get("found") == 26, out)
+        why = dict((m["ref"], m.get("why", "")) for m in (report or {}).get("members", []))
+        expect_true("code_anchors did not say where it looked for a member that went",
+                    "app/src/order.kt" in why.get("OrderSummary.checkoutEnabled", ""), out)
+        code, out = run("code_anchors.py", ["--docs", os.path.join(tree, "docs"), "--repos", ".",
+                                            "--check"], tree)
+        expect("code_anchors --check with a member that went, as a report", code, 1, out)
+        code, out = run("code_anchors.py", ["--docs", os.path.join(tree, "docs"), "--repos", "."], tree)
+        expect_true("code_anchors did not list a member that went in a section of its own",
+                    code == 0 and "MEMBER NOT FOUND" in out
+                    and "OrderSummary.checkoutEnabled" in out.split("MEMBER NOT FOUND", 1)[-1]
+                    and "Pricing.quote" not in out.split("MEMBER NOT FOUND", 1)[-1], out)
+        code, out = run("code_anchors.py", ["--docs", os.path.join(tree, "docs")], tree)
+        expect_true("code_anchors without --repos did not say how many member references it left",
+                    code == 0 and "member references: {0}".format(len(members)) in out, out)
+
+        # An argument list is not part of the name, and a chain stops at what the first call returns.
+        write(tree, "docs/features/feature-x.md", doc("active", "app/src/order.kt", (
+            "\n`PaymentProcessor.capture()` `PaymentProcessor.capture(amount)` `Loan.renew().again()`\n"
+            "`PaymentProcessor.charge(amount)`\n")))
+        code, report, out = anchors(tree, ".")
+        status = sorted((m["ref"], m["status"]) for m in (report or {}).get("members", []))
+        expect_true("code_anchors read an argument list as part of a member: {0}".format(status),
+                    status == [("Loan.renew", "found"), ("PaymentProcessor.capture", "found"),
+                               ("PaymentProcessor.charge", "missing")], out)
+
+        # A member the sentence says is gone is expressible, and only through the strike on both sides.
+        write(tree, "docs/features/feature-x.md", doc("active", "app/src/order.kt", (
+            "\n~~`OrderSummary.gone`~~ left the wire. ~~`OrderSummary.total`~~ is still declared.\n"
+            "~~`Pricing.quote`~~ was never ours.\n")))
+        code, report, out = anchors(tree, ".", "--check")
+        status = dict((m["ref"], m["status"]) for m in (report or {}).get("members", []))
+        expect_true("code_anchors did not read a struck reference as a member named as removed: {0}"
+                    .format(status), status == {"OrderSummary.gone": "removed",
+                                                "OrderSummary.total": "found",
+                                                "Pricing.quote": "foreign"}, out)
+        expect("code_anchors --check with a member struck through", code, 0, out)
+        write(tree, "docs/features/feature-x.md", doc("active", "app/src/order.kt", (
+            "\n~~`OrderSummary.gone` left the wire and so did `OrderSummary.other`~~\n")))
+        code, report, out = anchors(tree, ".", "--check")
+        expect_true("code_anchors took a strike over a whole sentence as one on the reference",
+                    code == 1 and report is not None
+                    and report.get("member_counts", {}).get("missing") == 2, out)
+
+        # History is not looked in; an item that is still alive is, for members and not for paths.
+        write(tree, "docs/features/feature-x.md", doc("active", "app/src/order.kt"))
+        item = "---\nid: {0}\ntitle: T\nstatus: {1}\npriority: P1\nsize: S\nstage: s\n---\n\n{2}\n"
+        for name, state, ref in (("B-01-a", "done", "OrderSummary.inDone"),
+                                 ("B-02-b", "dropped", "OrderSummary.inDropped")):
+            write(tree, "docs/backlog/{0}.md".format(name),
+                  item.format(name[:4], state, "`{0}` and `no/such/path.kt`".format(ref)))
+        write(tree, "docs/services/old.md", (
+            "---\nid: old\ntitle: O\ntype: service\nstatus: deprecated\n---\n\n`OrderSummary.inOld`\n"))
+        code, report, out = anchors(tree, ".", "--check")
+        expect_true("code_anchors looked into a done or dropped backlog item, or a deprecated document",
+                    code == 0 and report is not None and report.get("members") == []
+                    and sorted(report.get("history_documents", [])) == [
+                        "backlog/B-01-a.md", "backlog/B-02-b.md", "services/old.md"], out)
+        code, out = run("code_anchors.py", ["--docs", os.path.join(tree, "docs"), "--repos", "."], tree)
+        expect_true("code_anchors did not say how many documents it left out as history",
+                    "3 document(s)" in out, out)
+        for state in ("open", "wip", "question"):
+            write(tree, "docs/backlog/B-03-c.md", item.format("B-03", state,
+                  "`OrderSummary.inOpen` and `no/such/path.kt`"))
+            code, report, out = anchors(tree, ".", "--check")
+            expect_true("code_anchors did not look for a member in a backlog item that is {0}, or "
+                        "took its plan for a path".format(state),
+                        code == 1 and report is not None and missing_paths(report) == []
+                        and [m["ref"] for m in report.get("members", [])] == ["OrderSummary.inOpen"], out)
+
+    # The tree a member is looked for in: the documentation's own repository and the ones its service
+    # documents name. A sibling on the same laptop declaring the same type is not this code.
+    with tempfile.TemporaryDirectory() as root:
+        repos = os.path.join(root, "repos")
+        own = os.path.join(repos, "own")
+        write(own, "src/own.kt", "class Own(val here: Int)\n")
+        write(os.path.join(repos, "named"), "src/named.kt", "class Named(val here: Int)\n")
+        write(os.path.join(repos, "stranger"), "src/s.kt", "class Stranger(val here: Int)\n")
+        write(own, "docs/services/named.md", (
+            "---\nid: named\ntitle: N\ntype: service\nstatus: active\n"
+            "repo_url: https://example.com/named\n---\n\n| a | `src/named.kt` |\n"))
+        write(own, "docs/features/feature-x.md", doc("active", "own/src/own.kt", (
+            "\n`Own.here` `Own.gone` `Named.here` `Named.gone` `Stranger.here` `Stranger.gone`\n")))
+        code, report, out = anchors(own, repos)
+        status = dict((m["ref"], m["status"]) for m in (report or {}).get("members", []))
+        expect_true("code_anchors looked for a member outside the repositories the documentation "
+                    "names: {0}".format(status), status == {
+                        "Own.here": "found", "Own.gone": "missing", "Named.here": "found",
+                        "Named.gone": "missing", "Stranger.here": "foreign", "Stranger.gone": "foreign"},
+                    out)
+
     # -- addresses: the ref is what was read (SPEC 4.1) -----------------------------------------------
     # `owner/repo@ref` passed on its shape alone, so `@<a branch that only lives in somebody's clone>`
     # was as good as a commit. A ref has to look like a commit or a version tag; anything else, and no
@@ -1145,7 +1328,8 @@ A scenario with an `**Automated:**` line names its test; this sentence is about 
           "them and for no other, uncounted scenarios reported, a shipped "
           "change without a version bump and a template pinning another release refused, reports "
           "that cannot block the gate, anchors not looked for where they should not be, anchors "
-          "citing lines looked for and anchors found only in their own repository, `./` read as "
+          "citing lines looked for and anchors found only in their own repository, a member of a type told "
+          "from one that went, from a file name, from somebody else's type and from history, `./` read as "
           "the root and `../` as leaving it, addresses at a branch or at no ref, snapshots, dynamic "
           "versions and unversioned files told from pinned ones without failing --check, an "
           "address with a fetchable left side taken for a path into the code, a "
