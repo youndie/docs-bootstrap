@@ -1287,6 +1287,114 @@ A scenario with an `**Automated:**` line names its test; this sentence is about 
                         "second test".format(mode),
                         [r["test"] for r in refs[len(wanted):]] == ["LoanTest"], out)
 
+    # A WALKED TREE IS READ ONCE, AND NOT AT ALL WHEN A CHECKOUT ANSWERS. With no repository named, a
+    # test is looked for in every directory under --repos, in name order, and each one that is not a
+    # checkout was walked and read in full - again for every name. `make check` with `--repos ..` in
+    # a home directory read the runner's work tree, the JDKs and every plain directory beside the
+    # clone once per test the documents named: 181 GB in 68 minutes, for names that were all in the
+    # clone itself. The count is of files opened, by the module's own `open`, so it holds whatever
+    # the search is built from.
+    sys.path.insert(0, SCRIPTS)
+    import bdd_report
+    with tempfile.TemporaryDirectory() as root:
+        plain, app = os.path.join(root, "aa-plain"), os.path.join(root, "zz-app")
+        for i in range(3):
+            write(plain, "src/f{0}.kt".format(i), "class Unrelated{0}\n".format(i))
+        write(app, "src/AppTest.kt", "class AppTest {\n    fun one() {}\n    fun two() {}\n}\n")
+        git(app, "init", "-q")
+        git(app, "add", "-A")
+        git(app, "commit", "-q", "-m", "base")
+        refs = ["AppTest.one", "AppTest.two", "AppTest", "GoneTest", "OtherGoneTest", "LastGoneTest"]
+        body = "".join("\n### Scenario: {0}\n* **Automated:** `{1}`\n".format(i, ref)
+                       for i, ref in enumerate(refs))
+        write(root, "doctree/docs/features/feature-x.md", doc("active", "src/AppTest.kt", body))
+        opened = []
+
+        def counting_open(path, *args, **kwargs):
+            opened.append(os.path.relpath(path, root))
+            return open(path, *args, **kwargs)
+
+        bdd_report.open = counting_open
+        try:
+            docs_root = os.path.join(root, "doctree", "docs")
+            items = bdd_report.verify(bdd_report.collect(docs_root), root, docs_root)
+        finally:
+            del bdd_report.open
+        found = dict((a["test"], a.get("found")) for i in items for a in i["references"])
+        expect_true("bdd_report answered differently once it read walked trees once: {0}".format(found),
+                    found == {"AppTest.one": True, "AppTest.two": True, "AppTest": True,
+                              "GoneTest": False, "OtherGoneTest": False, "LastGoneTest": False},
+                    found)
+        walked = sorted(p for p in opened if p.startswith("aa-plain" + os.sep))
+        expect_true("bdd_report read a walked tree more than once, or for names a checkout had "
+                    "answered: {0}".format(walked),
+                    walked == sorted(os.path.join("aa-plain", "src", "f{0}.kt".format(i))
+                                     for i in range(3)), walked)
+
+    # The documentation's own tree is looked in first, checkout or not. A clone synced to a build
+    # machine without `.git` is walked, and in name order every plain directory before it was read
+    # in full first - 30 GB of a home directory for names that were all in the clone.
+    with tempfile.TemporaryDirectory() as root:
+        junk, own = os.path.join(root, "aa-junk"), os.path.join(root, "zz-own")
+        write(junk, "notes.txt", "nothing here\n")
+        other = os.path.join(root, "bb-other")
+        write(other, "src/Other.kt", "class Other\n")
+        git(other, "init", "-q")
+        git(other, "add", "-A")
+        git(other, "commit", "-q", "-m", "base")
+        write(own, "src/OwnTest.kt", "class OwnTest {\n    fun one() {}\n}\n")
+        write(own, "docs/features/feature-x.md", doc(
+            "active", "src/OwnTest.kt",
+            "\n### Scenario: a\n* **Automated:** `OwnTest.one`\n"
+            "\n### Scenario: b\n* **Automated:** `OwnTest`\n"))
+        opened, grepped = [], []
+        real_git_find = bdd_report._git_find
+
+        def counting_git_find(repo, name):
+            grepped.append(os.path.relpath(repo, root))
+            return real_git_find(repo, name)
+
+        bdd_report.open, bdd_report._git_find = counting_open, counting_git_find
+        try:
+            docs_root = os.path.join(own, "docs")
+            items = bdd_report.verify(bdd_report.collect(docs_root), root, docs_root)
+        finally:
+            del bdd_report.open
+            bdd_report._git_find = real_git_find
+        expect_true("bdd_report grepped other checkouts before the documentation's own tree: {0}"
+                    .format(grepped), grepped == [], grepped)
+        found = [(a["test"], a.get("found"), a.get("at")) for i in items for a in i["references"]]
+        expect_true("bdd_report did not find the tests in the documentation's own walked tree: {0}"
+                    .format(found), found == [("OwnTest.one", True, "src/OwnTest.kt"),
+                                              ("OwnTest", True, "src/OwnTest.kt")], found)
+        read = [p for p in opened if p.startswith("aa-junk" + os.sep)]
+        expect_true("bdd_report read a tree beside the documentation's own before it: {0}"
+                    .format(read), read == [], read)
+
+    # A file that is not a regular file is not read. A FIFO in a walked tree - a home directory holds
+    # them - blocked the report on its first `open`, for ever, with no writer at the other end.
+    if hasattr(os, "mkfifo"):
+        with tempfile.TemporaryDirectory() as root:
+            plain = os.path.join(root, "plain")
+            write(plain, "src/RealTest.kt", "class RealTest\n")
+            os.mkfifo(os.path.join(plain, "src", "0-pipe"))
+            write(root, "doctree/docs/features/feature-x.md", doc(
+                "active", "src/RealTest.kt", "\n### Scenario: s\n* **Automated:** `RealTest`\n"))
+            try:
+                result = subprocess.run(
+                    [sys.executable, os.path.join(SCRIPTS, "bdd_report.py"), "--json",
+                     "--docs", os.path.join(root, "doctree", "docs"), "--repos", root],
+                    cwd=root, capture_output=True, text=True, timeout=30)
+                out = result.stdout + result.stderr
+                report = json.loads(result.stdout)
+                found = [r.get("found") for d in report["documents"] for r in d["references"]]
+            except subprocess.TimeoutExpired:
+                out, found = "timed out", None
+            except ValueError:
+                found = None
+            expect_true("bdd_report opened a FIFO in a walked tree: {0}".format(found),
+                        found == [True], out)
+
     # A file name after a repository or a module is a file of that name inside it - not at its root,
     # and not in a sibling. Without one, it is in the documentation's own repository (SPEC 4).
     with tempfile.TemporaryDirectory() as root:

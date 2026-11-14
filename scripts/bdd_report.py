@@ -53,6 +53,7 @@ import argparse
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 
@@ -362,15 +363,58 @@ def _word(name):
     return re.compile(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])")
 
 
-def _contains(path, word):
-    """Is the name written anywhere in this file, as a word? Text only, and small files only."""
+def _read_text(path):
+    """The text of a small regular file, or None. A FIFO, a socket or a device is not source - and a
+    FIFO with no writer blocks `open` for ever, which a walk of a home directory runs into."""
     try:
-        if os.path.getsize(path) > MAX_GREP_BYTES:
-            return False
+        st = os.stat(path)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_GREP_BYTES:
+            return None
         with open(path, encoding="utf-8", errors="ignore") as fh:
-            return word.search(fh.read()) is not None
+            return fh.read()
     except OSError:
-        return False
+        return None
+
+
+def _is_checkout(repo):
+    return os.path.exists(os.path.join(repo, ".git"))     # a file, in a worktree
+
+
+def _git_find(repo, name):
+    """(found, where) by `git grep` in a checkout; (None, None) when git cannot answer."""
+    try:
+        hit = subprocess.run(["git", "grep", "-l", "-w", "-F", "-e", name,
+                              "--", ":(exclude)*.md"],
+                             cwd=repo, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None, None
+    out = hit.stdout.strip()
+    return (True, out.split("\n")[0]) if out else (False, None)
+
+
+def _walk_find(repo, names):
+    """Each of `names` found in a tree that is not a checkout -> the first file that has it as a word.
+
+    ONE WALK FOR ALL THE NAMES, EACH FILE READ ONCE, and it stops when every name is found. A walk
+    per name read the same tree once for every test the documents named (see verify)."""
+    words = dict((n, _word(n)) for n in names)
+    hits = {}
+    for base, dirs, files in os.walk(repo):
+        dirs[:] = sorted(d for d in dirs if d not in IGNORED_DIRS and not d.startswith("."))
+        for f in sorted(files):
+            if f.endswith(".md"):
+                continue                   # see find_test: a document is not evidence
+            full = os.path.join(base, f)
+            text = _read_text(full)
+            if text is None:
+                continue
+            for name, word in list(words.items()):
+                if word.search(text):
+                    hits[name] = os.path.relpath(full, repo).replace(os.sep, "/")
+                    del words[name]
+            if not words:
+                return hits
+    return hits
 
 
 def find_test(repo, name):
@@ -399,27 +443,11 @@ def find_test(repo, name):
     everything found that document, reported the test as present, and went on reporting it as
     present after the test had been renamed away. The check answered a question about itself.
     """
-    if os.path.exists(os.path.join(repo, ".git")):     # a file, in a worktree
-        try:
-            hit = subprocess.run(["git", "grep", "-l", "-w", "-F", "-e", name,
-                                  "--", ":(exclude)*.md"],
-                                 cwd=repo, capture_output=True, text=True, timeout=30)
-        except (OSError, subprocess.SubprocessError):
-            return None, None
-        out = hit.stdout.strip()
-        return (True, out.split("\n")[0]) if out else (False, None)
-
+    if _is_checkout(repo):
+        return _git_find(repo, name)
     # Not a git checkout: walk it, and report the first file whose text has the name as a word.
-    word = _word(name)
-    for base, dirs, files in os.walk(repo):
-        dirs[:] = sorted(d for d in dirs if d not in IGNORED_DIRS and not d.startswith("."))
-        for f in sorted(files):
-            if f.endswith(".md"):
-                continue                   # see the docstring: a document is not evidence
-            full = os.path.join(base, f)
-            if _contains(full, word):
-                return True, os.path.relpath(full, repo).replace(os.sep, "/")
-    return False, None
+    hits = _walk_find(repo, [name])
+    return (True, hits[name]) if name in hits else (False, None)
 
 
 def _by_name(anchor, name, dirs, trees):
@@ -497,7 +525,28 @@ def verify(items, repos_root, docs_root):
     # subject, so a name was "found" there long after the code had dropped it.
     everything = [os.path.join(repos_root, n) for n in sorted(os.listdir(repos_root))
                   if os.path.isdir(os.path.join(repos_root, n)) and code_anchors.is_tree(n)]
+    #
+    # THE DOCUMENTATION'S OWN TREE FIRST, THEN THE OTHER CHECKOUTS, THEN THE OTHER WALKED TREES - and
+    # a walked tree read once. In name order, with a walk per name, a plain directory that sorted
+    # before the clone was read in full for every test the documents named, though the clone would
+    # have answered each at once. `make check` with `--repos ..` in a home directory - the runner's
+    # work tree, JDKs, an Android SDK and every plain directory beside the clone - read 181 GB in 68
+    # minutes and was still going. The own tree goes first even when it is walked: a clone synced to
+    # a build machine without its `.git` is, and behind the other checkouts it cost a `git grep` in
+    # each of them for every name. A name found in a tree is not looked for in the trees after it.
+    real_docs = os.path.realpath(docs_root)
+    checkout = {}
+
+    def is_checkout(c):
+        if c not in checkout:
+            checkout[c] = _is_checkout(c)
+        return checkout[c]
+
+    def rank(c):
+        return not real_docs.startswith(os.path.realpath(c) + os.sep), not is_checkout(c)
+
     trees = None                       # loaded for the first reference that is a path
+    pending = []                       # (reference, candidates in the order they are looked in)
     for item in items:
         for a in item["references"]:
             # No repository named means "somewhere in what was given", which is the normal case for
@@ -520,11 +569,22 @@ def verify(items, repos_root, docs_root):
                 if _check_file(a, trees, candidates):
                     continue
             a["found"], a["at"] = False, ""
-            for candidate in candidates:
-                found, at = find_test(candidate, a["needle"])
-                if found:
-                    a["found"], a["at"] = True, at
-                    break
+            pending.append((a, sorted(candidates, key=rank)))
+    # A walked tree is read the first time a name needs it, for every name not found yet that looks
+    # in it - one walk, each file read once, however many tests the documents name.
+    walks = {}
+    for a, candidates in pending:
+        for candidate in candidates:
+            if is_checkout(candidate):
+                found, at = _git_find(candidate, a["needle"])
+            else:
+                if candidate not in walks:
+                    walks[candidate] = _walk_find(candidate, set(
+                        b["needle"] for b, cs in pending if not b["found"] and candidate in cs))
+                found, at = a["needle"] in walks[candidate], walks[candidate].get(a["needle"])
+            if found:
+                a["found"], a["at"] = True, at
+                break
     return items
 
 
